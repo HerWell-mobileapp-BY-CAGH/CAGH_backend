@@ -1,0 +1,20 @@
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import (
+    FacilityViewSet,
+    AuditLogViewSet,
+    ReportViewSet,
+    LanguageListView,
+    LanguageSelectView,
+)
+
+router = DefaultRouter()
+router.register(r'facilities', FacilityViewSet, basename='facility')
+router.register(r'audit-logs', AuditLogViewSet, basename='audit-log')
+router.register(r'reports', ReportViewSet, basename='report')
+
+urlpatterns = [
+    path('languages/', LanguageListView.as_view(), name='language-list'),
+    path('languages/select/', LanguageSelectView.as_view(), name='language-select'),
+    path('', include(router.urls)),
+]
