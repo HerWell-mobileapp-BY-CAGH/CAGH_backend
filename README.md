@@ -9,7 +9,7 @@ Backend RESTful API and WebSocket service for **CAGH Adolescent Girls Healthcare
 
 ---
 
-## 🏗️ Architecture & Core Modules
+##  Architecture & Core Modules
 
 The platform is organized into modular domain services:
 
@@ -26,7 +26,7 @@ The platform is organized into modular domain services:
 
 ---
 
-## 🛠️ Technology Stack
+##  Technology Stack
 
 | Component | Technology |
 | :--- | :--- |
@@ -41,7 +41,7 @@ The platform is organized into modular domain services:
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Prerequisites
 * [Docker](https://www.docker.com/) and Docker Compose installed on your system.
@@ -69,7 +69,7 @@ docker compose exec web python manage.py createsuperuser
 
 ---
 
-## 📖 API Documentation
+## API Documentation
 
 When the application is running locally, access the interactive API documentation at:
 
@@ -79,7 +79,7 @@ When the application is running locally, access the interactive API documentatio
 
 ---
 
-## 🧪 Testing
+## Testing
 
 Run the automated test suite inside the container:
 
