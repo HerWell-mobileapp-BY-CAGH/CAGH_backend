@@ -62,7 +62,7 @@ docker compose up -d --build
 docker compose exec web python manage.py migrate
 ```
 
-### 5. Create Superuser (Admin Access)
+### 5. (Optional) Create Superuser (Admin Access)
 ```bash
 docker compose exec web python manage.py createsuperuser
 ```
