@@ -32,6 +32,9 @@ class MidwifeProfile(models.Model):
     license_number = models.CharField(max_length=100, unique=True)
     bio = models.TextField(blank=True)
     experience_years = models.PositiveIntegerField(default=0)
+    languages = models.CharField(max_length=200, blank=True, default="English, Amharic")
+    cv_url = models.URLField(max_length=500, blank=True, null=True)
+    offered_consultation_types = models.JSONField(default=list, blank=True)
     verification_status = models.CharField(
         max_length=20,
         choices=VerificationStatus.choices,
@@ -45,12 +48,19 @@ class MidwifeProfile(models.Model):
         blank=True,
         related_name='verified_midwives'
     )
-    rejection_reason = models.TextField(blank=True)
+    rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
+    rating_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+
+    class Meta:
+        ordering = ['-created_at']
+
     def __str__(self):
         return f"Midwife {self.user.username} - {self.verification_status}"
+
+
 
 
 class Qualification(models.Model):
@@ -96,3 +106,19 @@ class SavedMidwife(models.Model):
 
     def __str__(self):
         return f"{self.user.username} saved {self.midwife.user.username}"
+
+
+class BlockedDate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    midwife = models.ForeignKey(MidwifeProfile, on_delete=models.CASCADE, related_name='blocked_dates')
+    date = models.DateField()
+    reason = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('midwife', 'date')
+        ordering = ['date']
+
+    def __str__(self):
+        return f"{self.midwife.user.username} blocked {self.date} ({self.reason})"
+

@@ -133,3 +133,76 @@ class AuthenticationTestCase(APITestCase):
         login_res = self.client.post(login_url, {"phone_number": "+233201112233", "password": "NewSecurePassword123!"}, format="json")
         self.assertEqual(login_res.status_code, status.HTTP_200_OK)
 
+
+class UserManagementTestCase(APITestCase):
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="test_patient",
+            email="patient_mgmt@example.com",
+            phone_number="+251911223344",
+            password="TestPassword123!",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_get_and_update_user_me(self):
+        url = reverse("user-me")
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["email"], "patient_mgmt@example.com")
+
+        # Update profile
+        patch_res = self.client.patch(url, {"profile": {"first_name": "Sara", "city": "Addis Ababa"}}, format="json")
+        self.assertEqual(patch_res.status_code, status.HTTP_200_OK)
+
+    def test_user_preferences(self):
+        url = reverse("user-preferences")
+        get_res = self.client.get(url)
+        self.assertEqual(get_res.status_code, status.HTTP_200_OK)
+
+        patch_res = self.client.patch(url, {"dark_mode": True, "push_notifications": False}, format="json")
+        self.assertEqual(patch_res.status_code, status.HTTP_200_OK)
+        self.assertTrue(patch_res.data["dark_mode"])
+        self.assertFalse(patch_res.data["push_notifications"])
+
+    def test_emergency_contacts_crud(self):
+        list_url = reverse("emergency-contact-list")
+        # Create contact
+        create_res = self.client.post(
+            list_url,
+            {"name": "Mother", "relationship": "Parent", "phone_number": "+251922334455", "is_primary": True},
+            format="json",
+        )
+        self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
+        contact_id = create_res.data["id"]
+
+        # List contacts
+        list_res = self.client.get(list_url)
+        self.assertEqual(list_res.status_code, status.HTTP_200_OK)
+        results = list_res.data.get("results", list_res.data)
+        self.assertEqual(len(results), 1)
+
+
+        # Delete contact
+        detail_url = reverse("emergency-contact-detail", kwargs={"pk": contact_id})
+        del_res = self.client.delete(detail_url)
+        self.assertEqual(del_res.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_sos_log_trigger(self):
+        url = reverse("sos-log-list")
+        res = self.client.post(url, {"latitude": "9.030000", "longitude": "38.740000"}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data["status"], "SOS_TRIGGERED")
+        self.assertEqual(res.data["call_url"], "tel:907")
+        self.assertIn("hotlines", res.data)
+        self.assertIn("location", res.data)
+
+    def test_sos_hotlines_endpoint(self):
+        url = reverse("sos-log-hotlines")
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["default_call_url"], "tel:907")
+        self.assertGreater(len(res.data["hotlines"]), 0)
+
+
+

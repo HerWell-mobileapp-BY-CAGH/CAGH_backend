@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Hospital, MidwifeProfile, Qualification, Certificate, Expertise, SavedMidwife
+from .models import Hospital, MidwifeProfile, Qualification, Certificate, Expertise, SavedMidwife, BlockedDate
 from apps.users.user_serializers import UserSerializer
 
 
@@ -29,6 +29,13 @@ class ExpertiseSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+class BlockedDateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BlockedDate
+        fields = '__all__'
+        read_only_fields = ('id', 'midwife', 'created_at')
+
+
 class MidwifeProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     hospital = HospitalSerializer(read_only=True)
@@ -52,3 +59,13 @@ class SavedMidwifeSerializer(serializers.ModelSerializer):
         model = SavedMidwife
         fields = '__all__'
         read_only_fields = ('id', 'user', 'created_at')
+
+
+class MidwifeDashboardSerializer(serializers.Serializer):
+    verification_status = serializers.CharField()
+    today_schedule = serializers.ListField()
+    upcoming_appointments = serializers.ListField()
+    pending_requests = serializers.ListField()
+    recent_history = serializers.ListField()
+    counts = serializers.DictField()
+

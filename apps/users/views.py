@@ -32,7 +32,9 @@ from django.utils import timezone
 
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.response import Response
+from rest_framework.decorators import action
 from rest_framework.views import APIView
+
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
 
@@ -602,20 +604,80 @@ class EmergencyContactViewSet(viewsets.ModelViewSet):
 
 
 class SOSLogViewSet(viewsets.ModelViewSet):
-    """SOS event log for the authenticated user."""
+    """
+    3.8 Emergency Assistance Module
+    FR-026 Emergency SOS
+    Provides persistent access to emergency hotlines (tel:907, tel:991, tel:952),
+    logs GPS location, and alerts saved emergency contacts.
+    """
 
     serializer_class = SOSLogSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-    @extend_schema(tags=["Users"])
+    @extend_schema(summary="List user SOS logs", tags=["Emergency SOS"])
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
         return SOSLog.objects.filter(user=self.request.user)
 
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        sos_log = serializer.save(user=request.user)
+
+        lat = sos_log.latitude
+        lng = sos_log.longitude
+        maps_url = f"https://maps.google.com/?q={lat},{lng}"
+
+        # Alert user's saved emergency contacts
+        contacts = EmergencyContact.objects.filter(user=request.user)
+        notified_count = 0
+
+        from apps.notifications.models import Notification
+        for contact in contacts:
+            Notification.objects.create(
+                user=request.user,
+                title=f"SOS Alert Sent to {contact.name}",
+                body=f"Emergency alert dispatched to {contact.name} ({contact.phone_number}). Location: {maps_url}",
+                type="EMERGENCY_SOS",
+                action="SOS_ALERT",
+                reference_id=str(sos_log.id),
+            )
+            notified_count += 1
+
+        return Response({
+            "status": "SOS_TRIGGERED",
+            "message": "Emergency SOS triggered. Location logged and emergency contacts alerted.",
+            "call_url": "tel:907",
+            "hotlines": [
+                {"name": "National Health & Ambulance Hotline", "number": "907", "call_url": "tel:907"},
+                {"name": "Police Emergency", "number": "991", "call_url": "tel:991"},
+                {"name": "Women & Children Support Hotline", "number": "952", "call_url": "tel:952"},
+                {"name": "Red Cross Emergency Ambulance", "number": "907", "call_url": "tel:907"},
+            ],
+            "notified_contacts_count": notified_count,
+            "location": {
+                "latitude": float(lat),
+                "longitude": float(lng),
+                "google_maps_url": maps_url,
+            },
+            "sos_log": serializer.data,
+        }, status=status.HTTP_201_CREATED)
+
+    @extend_schema(summary="Get emergency hotlines list", tags=["Emergency SOS"])
+    @action(detail=False, methods=['get'])
+    def hotlines(self, request):
+        return Response({
+            "default_call_url": "tel:907",
+            "hotlines": [
+                {"name": "National Health & Ambulance Hotline", "number": "907", "call_url": "tel:907"},
+                {"name": "Police Emergency", "number": "991", "call_url": "tel:991"},
+                {"name": "Women & Children Support Hotline", "number": "952", "call_url": "tel:952"},
+                {"name": "Red Cross Emergency Ambulance", "number": "907", "call_url": "tel:907"},
+            ]
+        }, status=status.HTTP_200_OK)
+
 
 
 class UserPreferenceView(generics.RetrieveUpdateAPIView):

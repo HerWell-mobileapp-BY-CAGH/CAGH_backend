@@ -192,6 +192,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         )
         UserPreference.objects.create(user=user)
 
+        if user.role == User.Role.MIDWIFE:
+            from apps.midwives.models import MidwifeProfile
+            MidwifeProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
+                    "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                }
+            )
+
         return user
 
 

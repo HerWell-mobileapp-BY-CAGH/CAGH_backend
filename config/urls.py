@@ -33,20 +33,17 @@ urlpatterns = [
         name="redoc",
     ),
 
-    # ------------------------------------------------------- Authentication ─
-    # register, login, logout, token refresh/verify, password change & reset
+    # ------------------------------------------------ API v1 Endpoints
     path("api/v1/auth/", include("apps.users.auth_urls")),
-
-    # --------------------------------------------------------- Domain Modules
     path("api/v1/users/", include("apps.users.urls")),
     path("api/v1/midwives/", include("apps.midwives.urls")),
     path("api/v1/appointments/", include("apps.appointments.urls")),
     path("api/v1/consultations/", include("apps.consultations.urls")),
     path("api/v1/chat/", include("apps.chat.urls")),
-    path("api/v1/ai-assistant/", include("apps.ai_assistant.urls")),
-    path("api/v1/learning/", include("apps.learning.urls")),
     path("api/v1/notifications/", include("apps.notifications.urls")),
+    path("api/v1/learning/", include("apps.learning.urls")),
     path("api/v1/reviews/", include("apps.reviews.urls")),
+    path("api/v1/ai-assistant/", include("apps.ai_assistant.urls")),
     path("api/v1/common/", include("apps.common.urls")),
 ]
 

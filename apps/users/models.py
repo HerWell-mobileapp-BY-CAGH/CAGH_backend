@@ -77,6 +77,9 @@ class EmergencyContact(models.Model):
     phone_number = models.CharField(max_length=20)
     is_primary = models.BooleanField(default=False)
 
+    class Meta:
+        ordering = ['-is_primary', 'name']
+
     def __str__(self):
         return f"{self.name} ({self.relationship}) - {self.user.username}"
 
@@ -94,8 +97,12 @@ class SOSLog(models.Model):
     status = models.CharField(max_length=20, choices=SOSStatus.choices, default=SOSStatus.TRIGGERED)
     triggered_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ['-triggered_at']
+
     def __str__(self):
         return f"SOS by {self.user.username} at {self.triggered_at}"
+
 
 
 class UserPreference(models.Model):
