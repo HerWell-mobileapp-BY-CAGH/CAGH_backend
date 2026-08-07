@@ -166,6 +166,12 @@ class SendOTPView(APIView):
         target = serializer.validated_data["phone_number_or_email"].strip()
         purpose = str(serializer.validated_data["purpose"])
 
+        if "@" not in target:
+            return Response(
+                {"error": "Please provide a valid email address."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         code = str(random.randint(100000, 999999))
         expires_at = timezone.now() + timedelta(minutes=10)
 
@@ -178,6 +184,23 @@ class SendOTPView(APIView):
             expires_at=expires_at,
         )
 
+        try:
+            send_mail(
+                subject="CAGH — Verification OTP Code",
+                message=(
+                    f"Your CAGH verification OTP code is: {code}\n\n"
+                    f"This code will expire in 10 minutes.\n\n"
+                    f"If you did not request this, please ignore this email.\n\n"
+                    f"— The CAGH Team"
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL or "noreply@cagh.org",
+                recipient_list=[target],
+                fail_silently=False,
+            )
+        except Exception as e:
+            # If SMTP fails (e.g. invalid credentials), still allow DEBUG mode code inspection
+            pass
+
         masked = _mask_identifier(target)
 
         return Response(
@@ -188,6 +211,7 @@ class SendOTPView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
 
 
 
@@ -478,6 +502,12 @@ class PasswordResetOTPRequestView(APIView):
 
         target = serializer.validated_data["phone_number_or_email"].strip()
 
+        if "@" not in target:
+            return Response(
+                {"error": "Please provide a valid email address."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         code = str(random.randint(100000, 999999))
         expires_at = timezone.now() + timedelta(minutes=10)
 
@@ -492,6 +522,22 @@ class PasswordResetOTPRequestView(APIView):
             purpose=OTPVerification.Purpose.PASSWORD_RESET,
             expires_at=expires_at,
         )
+
+        try:
+            send_mail(
+                subject="CAGH — Password Reset OTP Code",
+                message=(
+                    f"Your CAGH password reset OTP code is: {code}\n\n"
+                    f"This code will expire in 10 minutes.\n\n"
+                    f"If you did not request this, please ignore this email.\n\n"
+                    f"— The CAGH Team"
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL or "noreply@cagh.org",
+                recipient_list=[target],
+                fail_silently=False,
+            )
+        except Exception:
+            pass
 
         masked = _mask_identifier(target)
 
