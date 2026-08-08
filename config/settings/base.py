@@ -17,7 +17,7 @@ except ImportError:
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-cagh-backend-default-key-change-me')
 DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0').split(',')
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0,cagh-backend-api.onrender.com,.onrender.com').split(',')
 
 # Custom User Model & Authentication Backends
 AUTH_USER_MODEL = 'users.User'

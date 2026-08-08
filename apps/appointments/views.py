@@ -103,6 +103,13 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_200_OK,
             )
 
+        # Check if midwife has toggled off live bookings
+        if getattr(midwife, 'is_accepting_bookings', True) is False:
+            return Response(
+                {"available": False, "reason": "Midwife is currently not accepting new bookings.", "slots": []},
+                status=status.HTTP_200_OK,
+            )
+
         # Check if date is blocked by midwife
         if BlockedDate.objects.filter(midwife=midwife, date=target_date).exists():
             return Response(
@@ -198,7 +205,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment = serializer.save(
             user=self.request.user,
             created_by=self.request.user,
-            fee=fee if fee is not None else 45.00
+            fee=fee if fee is not None else 0.00
         )
 
         # Dual-side notification immediately after booking (FR-013)
