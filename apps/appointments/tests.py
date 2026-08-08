@@ -161,7 +161,8 @@ class AppointmentManagementTestCase(APITestCase):
 
     def test_automated_celery_reminders_task(self):
         # Create appointment for tomorrow
-        tomorrow = date.today() + timedelta(days=1)
+        from django.utils import timezone
+        tomorrow = (timezone.now() + timedelta(days=1)).date()
         Appointment.objects.create(
             user=self.patient,
             midwife=self.midwife_profile,
