@@ -42,6 +42,7 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
     qualifications = QualificationSerializer(many=True, read_only=True)
     certificates = CertificateSerializer(many=True, read_only=True)
     expertises = ExpertiseSerializer(many=True, read_only=True)
+    is_favorite = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = MidwifeProfile
@@ -50,6 +51,12 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
             'id', 'user', 'verification_status', 'verified_at',
             'verified_by', 'rejection_reason', 'created_at', 'updated_at'
         )
+
+    def get_is_favorite(self, obj):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            return SavedMidwife.objects.filter(user=request.user, midwife=obj).exists()
+        return False
 
 
 class SavedMidwifeSerializer(serializers.ModelSerializer):

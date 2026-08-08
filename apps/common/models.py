@@ -1,21 +1,47 @@
 import uuid
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-
 class Facility(models.Model):
+    class FacilityType(models.TextChoices):
+        HOSPITAL = 'HOSPITAL', _('Hospital')
+        HEALTH_CENTER = 'HEALTH_CENTER', _('Health Center')
+        CLINIC = 'CLINIC', _('Clinic')
+        PHARMACY = 'PHARMACY', _('Pharmacy')
+        LABORATORY = 'LABORATORY', _('Laboratory')
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
-    facility_type = models.CharField(max_length=100)
+    facility_type = models.CharField(
+        max_length=50,
+        choices=FacilityType.choices,
+        default=FacilityType.HOSPITAL
+    )
     address = models.TextField()
-    location = models.CharField(max_length=255, blank=True)
+    city = models.CharField(max_length=100, blank=True)
+    region = models.CharField(max_length=100, blank=True)
+    phone_number = models.CharField(max_length=30, blank=True)
+    operating_hours = models.CharField(
+        max_length=200,
+        default="Mon-Fri: 8:00 AM - 6:00 PM, 24/7 Emergency"
+    )
+    available_services = models.JSONField(default=list, blank=True)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
 
     class Meta:
         verbose_name_plural = 'Facilities'
+        ordering = ['name']
 
     def __str__(self):
-        return f"{self.name} ({self.facility_type})"
+        return f"{self.name} ({self.get_facility_type_display()})"
+
 
 
 class AuditLog(models.Model):

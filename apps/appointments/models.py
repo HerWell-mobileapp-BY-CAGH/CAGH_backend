@@ -73,6 +73,7 @@ class Appointment(models.Model):
         default=AppointmentStatus.PENDING
     )
     reason = models.TextField(blank=True)
+    fee = models.DecimalField(max_digits=8, decimal_places=2, default=45.00)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

@@ -4,6 +4,8 @@ from .views import AIQuestionViewSet
 
 router = DefaultRouter()
 router.register(r'questions', AIQuestionViewSet, basename='ai-question')
+router.register(r'', AIQuestionViewSet, basename='ai-root')
+
 
 urlpatterns = [
     path('', include(router.urls)),

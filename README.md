@@ -9,7 +9,7 @@ Backend RESTful API and WebSocket service for **CAGH Adolescent Girls Healthcare
 
 ---
 
-##  Architecture & Core Modules
+## Architecture & Core Modules
 
 The platform is organized into modular domain services:
 
@@ -26,7 +26,7 @@ The platform is organized into modular domain services:
 
 ---
 
-##  Technology Stack
+## Technology Stack
 
 | Component | Technology |
 | :--- | :--- |
@@ -62,10 +62,11 @@ docker compose up -d --build
 docker compose exec web python manage.py migrate
 ```
 
-### 5. (Optional) Create Superuser (Admin Access)
+### 5. (Optional) Create Superuser (Admin Dashboard Access)
 ```bash
 docker compose exec web python manage.py createsuperuser
 ```
+
 
 ---
 

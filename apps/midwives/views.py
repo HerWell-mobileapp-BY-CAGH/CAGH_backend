@@ -1,3 +1,4 @@
+from django.db import models
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
@@ -53,7 +54,30 @@ class MidwifeProfileViewSet(viewsets.ModelViewSet):
             )
 
         # Public / Patients only see APPROVED midwives
-        return queryset.filter(verification_status=MidwifeProfile.VerificationStatus.APPROVED)
+        queryset = queryset.filter(verification_status=MidwifeProfile.VerificationStatus.APPROVED)
+
+        search = self.request.query_params.get('search')
+        if search:
+            queryset = queryset.filter(
+                models.Q(user__first_name__icontains=search) |
+                models.Q(user__last_name__icontains=search) |
+                models.Q(user__username__icontains=search) |
+                models.Q(specialty__icontains=search) |
+                models.Q(hospital__name__icontains=search) |
+                models.Q(expertises__name__icontains=search)
+            ).distinct()
+
+        return queryset
+
+    @extend_schema(summary="Toggle midwife favorite/saved status", tags=["Midwives"])
+    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAuthenticated])
+    def favorite(self, request, pk=None):
+        midwife = self.get_object()
+        saved, created = SavedMidwife.objects.get_or_create(user=request.user, midwife=midwife)
+        if not created:
+            saved.delete()
+            return Response({'is_favorite': False, 'message': 'Removed from favorites.'}, status=status.HTTP_200_OK)
+        return Response({'is_favorite': True, 'message': 'Added to favorites.'}, status=status.HTTP_201_CREATED)
 
     @extend_schema(summary="Get or update authenticated midwife's own profile", tags=["Midwives"])
     @action(detail=False, methods=['get', 'patch', 'put'], permission_classes=[permissions.IsAuthenticated])

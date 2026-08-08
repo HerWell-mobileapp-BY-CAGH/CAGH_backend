@@ -3,7 +3,9 @@ from rest_framework.routers import DefaultRouter
 from .views import ConsultationViewSet
 
 router = DefaultRouter()
-router.register(r'sessions', ConsultationViewSet, basename='consultation')
+router.register(r'sessions', ConsultationViewSet, basename='consultation-session')
+router.register(r'', ConsultationViewSet, basename='consultation')
+
 
 urlpatterns = [
     path('', include(router.urls)),

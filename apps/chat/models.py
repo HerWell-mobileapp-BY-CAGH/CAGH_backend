@@ -17,6 +17,10 @@ class ChatRoom(models.Model):
     midwife = models.ForeignKey(MidwifeProfile, on_delete=models.CASCADE, related_name='chat_rooms')
     status = models.CharField(max_length=20, choices=RoomStatus.choices, default=RoomStatus.REQUESTED)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
 
     def __str__(self):
         return f"Chat Room ({self.user.username} & Midwife {self.midwife.user.username}) - {self.status}"
@@ -41,6 +45,10 @@ class Message(models.Model):
     content = models.TextField(blank=True)
     status = models.CharField(max_length=20, choices=MessageStatus.choices, default=MessageStatus.SENT)
     sent_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['sent_at']
 
     def __str__(self):
         return f"Message by {self.sender.username} in Room {self.chat_room.id}"
@@ -51,7 +59,8 @@ class Attachment(models.Model):
     message = models.OneToOneField(Message, on_delete=models.CASCADE, related_name='attachment')
     file_url = models.URLField(max_length=500)
     file_type = models.CharField(max_length=50)
-    size = models.PositiveIntegerField(help_text="File size in bytes")
+    size = models.PositiveIntegerField(default=0, help_text="File size in bytes")
 
     def __str__(self):
         return f"Attachment for Message {self.message.id}"
+

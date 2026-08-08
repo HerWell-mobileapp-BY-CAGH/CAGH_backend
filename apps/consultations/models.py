@@ -42,6 +42,9 @@ class Consultation(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        ordering = ['-created_at']
+
     def __str__(self):
         return f"Consultation {self.id} - {self.user.username} & Midwife {self.midwife.user.username}"
 
@@ -53,6 +56,9 @@ class ConsultationNote(models.Model):
     note = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
 
     def __str__(self):
         return f"Note by {self.midwife.user.username} on Consultation {self.consultation.id}"
@@ -77,10 +83,19 @@ class VoiceSession(models.Model):
 
 
 class VideoSession(models.Model):
+    class VideoSessionStatus(models.TextChoices):
+        INITIATED = 'INITIATED', _('Initiated')
+        ONGOING = 'ONGOING', _('Ongoing')
+        ENDED = 'ENDED', _('Ended')
+        FAILED = 'FAILED', _('Failed')
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     consultation = models.OneToOneField(Consultation, on_delete=models.CASCADE, related_name='video_session')
     session_key = models.CharField(max_length=255, unique=True)
-    status = models.CharField(max_length=50, default='INITIATED')
+    status = models.CharField(max_length=20, choices=VideoSessionStatus.choices, default=VideoSessionStatus.INITIATED)
+    started_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"Video Session {self.session_key} (Future)"
+        return f"Video Session {self.session_key} - {self.status}"
+

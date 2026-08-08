@@ -166,12 +166,6 @@ class SendOTPView(APIView):
         target = serializer.validated_data["phone_number_or_email"].strip()
         purpose = str(serializer.validated_data["purpose"])
 
-        if "@" not in target:
-            return Response(
-                {"error": "Please provide a valid email address."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         code = str(random.randint(100000, 999999))
         expires_at = timezone.now() + timedelta(minutes=10)
 
@@ -184,29 +178,29 @@ class SendOTPView(APIView):
             expires_at=expires_at,
         )
 
-        try:
-            send_mail(
-                subject="CAGH — Verification OTP Code",
-                message=(
-                    f"Your CAGH verification OTP code is: {code}\n\n"
-                    f"This code will expire in 10 minutes.\n\n"
-                    f"If you did not request this, please ignore this email.\n\n"
-                    f"— The CAGH Team"
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL or "noreply@cagh.org",
-                recipient_list=[target],
-                fail_silently=False,
-            )
-        except Exception as e:
-            # If SMTP fails (e.g. invalid credentials), still allow DEBUG mode code inspection
-            pass
+        if "@" in target:
+            try:
+                send_mail(
+                    subject="CAGH — Verification OTP Code",
+                    message=(
+                        f"Your CAGH verification OTP code is: {code}\n\n"
+                        f"This code will expire in 10 minutes.\n\n"
+                        f"If you did not request this, please ignore this email.\n\n"
+                        f"— The CAGH Team"
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL or "bitsuanabate45@gmail.com",
+                    recipient_list=[target],
+                    fail_silently=False,
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to send OTP email to {target}: {str(e)}")
 
         masked = _mask_identifier(target)
 
         return Response(
             {
                 "message": f"OTP sent successfully to {masked}.",
-                "otp_code": code if settings.DEBUG else "******",
                 "expires_at": expires_at.isoformat(),
             },
             status=status.HTTP_200_OK,
@@ -502,12 +496,6 @@ class PasswordResetOTPRequestView(APIView):
 
         target = serializer.validated_data["phone_number_or_email"].strip()
 
-        if "@" not in target:
-            return Response(
-                {"error": "Please provide a valid email address."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         code = str(random.randint(100000, 999999))
         expires_at = timezone.now() + timedelta(minutes=10)
 
@@ -523,28 +511,29 @@ class PasswordResetOTPRequestView(APIView):
             expires_at=expires_at,
         )
 
-        try:
-            send_mail(
-                subject="CAGH — Password Reset OTP Code",
-                message=(
-                    f"Your CAGH password reset OTP code is: {code}\n\n"
-                    f"This code will expire in 10 minutes.\n\n"
-                    f"If you did not request this, please ignore this email.\n\n"
-                    f"— The CAGH Team"
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL or "noreply@cagh.org",
-                recipient_list=[target],
-                fail_silently=False,
-            )
-        except Exception:
-            pass
+        if "@" in target:
+            try:
+                send_mail(
+                    subject="CAGH — Password Reset OTP Code",
+                    message=(
+                        f"Your CAGH password reset OTP code is: {code}\n\n"
+                        f"This code will expire in 10 minutes.\n\n"
+                        f"If you did not request this, please ignore this email.\n\n"
+                        f"— The CAGH Team"
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL or "bitsuanabate45@gmail.com",
+                    recipient_list=[target],
+                    fail_silently=False,
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to send Password Reset OTP email to {target}: {str(e)}")
 
         masked = _mask_identifier(target)
 
         return Response(
             {
                 "message": f"If an account matching '{masked}' exists, a password reset OTP code has been sent.",
-                "otp_code": code if settings.DEBUG else "******",
             },
             status=status.HTTP_200_OK,
         )

@@ -1,9 +1,17 @@
 import os
+import sys
 from pathlib import Path
 from datetime import timedelta
 
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR / '.env')
+except ImportError:
+    pass
 
 # Quick-start development settings - unsuitable for production
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-cagh-backend-default-key-change-me')
@@ -91,16 +99,25 @@ DB_PASSWORD = os.environ.get('POSTGRES_PASSWORD', 'cagh_secure_password')
 DB_HOST = os.environ.get('POSTGRES_HOST', 'localhost')
 DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': DB_NAME,
-        'USER': DB_USER,
-        'PASSWORD': DB_PASSWORD,
-        'HOST': DB_HOST,
-        'PORT': DB_PORT,
+if 'test' in sys.argv:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'test_db.sqlite3',
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': DB_NAME,
+            'USER': DB_USER,
+            'PASSWORD': DB_PASSWORD,
+            'HOST': DB_HOST,
+            'PORT': DB_PORT,
+        }
+    }
+
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -118,7 +135,12 @@ LANGUAGES = [
 ]
 TIME_ZONE = 'UTC'
 USE_I18N = True
+USE_L10N = True
 USE_TZ = True
+LOCALE_PATHS = [
+    BASE_DIR / 'locale',
+]
+
 
 
 # Static & Media Files
@@ -166,14 +188,31 @@ SIMPLE_JWT = {
 
 # DRF Spectacular / Swagger & OpenAPI Configuration
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'CAGH API',
-    'DESCRIPTION': 'RESTful API and WebSocket backend for CAGH Adolescent Girls Healthcare Services',
+    'TITLE': 'CAGH Digital Midwife API',
+    'DESCRIPTION': 'RESTful API and WebSocket backend organized in chronological mobile app user journey order.',
     'VERSION': '1.0.0',
-
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
     'SCHEMA_PATH_PREFIX': '/api/v1/',
     'SECURITY': [{'Bearer': []}],
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayOperationId': False,
+    },
+    'TAGS': [
+        {'name': '1. Splash & Languages', 'description': 'System Initialization, Languages, & Common Reference Data'},
+        {'name': '2. Auth & Security', 'description': 'Registration, OTP Verification, Login, & Password Recovery'},
+        {'name': '3. Users & Profiles', 'description': 'User Profile Management, Preferences, & Emergency Contacts'},
+        {'name': '4. Home & Learning', 'description': 'Home Dashboard Focus Areas, Educational Articles, & Topics'},
+        {'name': '5. Midwives & Consult Hub', 'description': 'Midwife Directory, Search, Profiles, Qualifications, & Admin Approvals'},
+        {'name': '6. Appointments', 'description': 'Appointment Scheduling & Management'},
+        {'name': '7. Consultations', 'description': 'Telemedicine Consultation Sessions'},
+        {'name': '8. Real-Time Chat', 'description': 'Direct Messaging & Real-Time Chat Channels'},
+        {'name': '9. AI Assistant', 'description': 'AI Healthcare Guidance & Chatbot Assistant'},
+        {'name': '10. Notifications', 'description': 'Push Notifications & Device Tokens'},
+        {'name': '11. Reviews & Ratings', 'description': 'Patient Reviews & Feedback'},
+    ]
 }
 
 # CORS Configuration

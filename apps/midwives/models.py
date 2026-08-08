@@ -48,6 +48,8 @@ class MidwifeProfile(models.Model):
         blank=True,
         related_name='verified_midwives'
     )
+    specialty = models.CharField(max_length=150, blank=True, default="Maternal Health Specialist")
+    consultation_fee = models.DecimalField(max_digits=8, decimal_places=2, default=45.00)
     rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
     rating_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

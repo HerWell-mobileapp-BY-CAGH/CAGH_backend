@@ -1,0 +1,91 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: CAGH Backend 1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-01 12:00+0000\n"
+"PO-Revision-Date: 2026-08-01 12:00+0000\n"
+"Last-Translator: CAGH Team <info@cagh.org>\n"
+"Language-Team: Amharic <am@li.org>\n"
+"Language: am\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Patient"
+msgstr "ታካሚ"
+
+msgid "Midwife"
+msgstr "አላዋቂ / መላዋቂ"
+
+msgid "Admin"
+msgstr "አስተዳዳሪ"
+
+msgid "Female"
+msgstr "ሴት"
+
+msgid "Male"
+msgstr "ወንድ"
+
+msgid "Other"
+msgstr "ሌላ"
+
+msgid "Prefer not to say"
+msgstr "አልናገርም"
+
+msgid "English"
+msgstr "እንግሊዝኛ"
+
+msgid "Amharic"
+msgstr "አማርኛ"
+
+msgid "Pending"
+msgstr "በመጠባበቅ ላይ"
+
+msgid "Under Review"
+msgstr "በግምገማ ላይ"
+
+msgid "Approved"
+msgstr "ተፀድቋል"
+
+msgid "Rejected"
+msgstr "ተሳይዟል / ተከልክሏል"
+
+msgid "Suspended"
+msgstr "ታግዷል"
+
+msgid "In-Person Consultation"
+msgstr "በአካል ምክክር"
+
+msgid "Virtual Voice Consultation"
+msgstr "በድምፅ (የስልክ) ምክክር"
+
+msgid "Virtual Video Consultation"
+msgstr "በቪዲዮ ምክክር"
+
+msgid "Confirmed"
+msgstr "ተረጋግጧል"
+
+msgid "Completed"
+msgstr "ተጠናቋል"
+
+msgid "Cancelled"
+msgstr "ተሰርዟል"
+
+msgid "Missed"
+msgstr "ያመለጡ"
+
+msgid "Hospital"
+msgstr "ሆስፒታል"
+
+msgid "Health Center"
+msgstr "ጤና ጣቢያ"
+
+msgid "Clinic"
+msgstr "ክሊኒክ"
+
+msgid "Pharmacy"
+msgstr "መድኃኒት ቤት"
+
+msgid "Laboratory"
+msgstr "ላቦራቶሪ"

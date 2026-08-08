@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from .models import Review
 from apps.users.user_serializers import UserSerializer
+from apps.consultations.models import Consultation
+
 
 
 class ReviewSerializer(serializers.ModelSerializer):

@@ -3,9 +3,15 @@ from .models import Facility, AuditLog, Report
 
 
 class FacilitySerializer(serializers.ModelSerializer):
+    distance_km = serializers.SerializerMethodField()
+
     class Meta:
         model = Facility
         fields = '__all__'
+
+    def get_distance_km(self, obj):
+        return getattr(obj, 'distance_km', None)
+
 
 
 class AuditLogSerializer(serializers.ModelSerializer):

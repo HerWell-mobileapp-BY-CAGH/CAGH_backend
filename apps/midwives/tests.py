@@ -112,3 +112,30 @@ class MidwifeManagementTestCase(APITestCase):
         res_approved = self.client.get(list_url)
         results_approved = res_approved.data.get("results", res_approved.data)
         self.assertEqual(len(results_approved), 1)
+
+    def test_midwife_search_and_favorite_toggle(self):
+        self.midwife_profile.verification_status = "APPROVED"
+        self.midwife_profile.specialty = "Maternal Health Specialist"
+        self.midwife_profile.save()
+
+        self.client.force_authenticate(user=self.patient_user)
+        list_url = reverse("midwife-profile-list")
+
+        # Search by specialty
+        search_res = self.client.get(f"{list_url}?search=Maternal")
+        results = search_res.data.get("results", search_res.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["specialty"], "Maternal Health Specialist")
+        self.assertFalse(results[0]["is_favorite"])
+
+        # Toggle favorite
+        fav_url = reverse("midwife-profile-favorite", kwargs={"pk": self.midwife_profile.id})
+        fav_res = self.client.post(fav_url)
+        self.assertEqual(fav_res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(fav_res.data["is_favorite"])
+
+        # Check search again -> is_favorite should be True
+        search_fav = self.client.get(f"{list_url}?search=mary")
+        results_fav = search_fav.data.get("results", search_fav.data)
+        self.assertEqual(len(results_fav), 1)
+        self.assertTrue(results_fav[0]["is_favorite"])
