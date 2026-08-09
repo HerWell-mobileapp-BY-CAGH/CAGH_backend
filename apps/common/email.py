@@ -24,14 +24,25 @@ class IPv4EmailBackend(DjangoEmailBackend):
         if resend_key or brevo_key:
             sent_count = 0
             for msg in email_messages:
-                try:
-                    if resend_key:
+                sent = False
+                if resend_key:
+                    try:
                         self._send_via_resend(msg, resend_key)
-                    elif brevo_key:
+                        sent = True
+                    except Exception as e:
+                        logger.error(f"Resend HTTP API email send failed: {e}")
+
+                if not sent and brevo_key:
+                    try:
                         self._send_via_brevo(msg, brevo_key)
+                        sent = True
+                    except Exception as e:
+                        logger.error(f"Brevo HTTP API email send failed: {e}")
+
+                if sent:
                     sent_count += 1
-                except Exception as e:
-                    logger.error(f"Failed HTTP API email send: {e}. Falling back to SMTP.")
+                else:
+                    logger.error("All HTTP API email services failed. Falling back to SMTP.")
                     try:
                         sent_count += super().send_messages([msg])
                     except Exception as smtp_err:
@@ -67,14 +78,19 @@ class IPv4EmailBackend(DjangoEmailBackend):
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status not in (200, 201):
-                raise RuntimeError(f"Resend HTTP error: {resp.status}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status not in (200, 201):
+                    raise RuntimeError(f"Resend HTTP status: {resp.status}")
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Resend HTTP {e.code} error: {err_body}") from e
 
     def _send_via_brevo(self, msg, api_key):
         url = "https://api.brevo.com/v3/smtp/email"
+        from_email = msg.from_email or os.environ.get("DEFAULT_FROM_EMAIL", "bitsuanabate45@gmail.com")
         payload = json.dumps({
-            "sender": {"name": "CAGH", "email": msg.from_email or "bitsuanabate45@gmail.com"},
+            "sender": {"name": "CAGH", "email": from_email},
             "to": [{"email": recipient} for recipient in msg.to],
             "subject": msg.subject,
             "textContent": msg.body,
@@ -90,9 +106,13 @@ class IPv4EmailBackend(DjangoEmailBackend):
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if resp.status not in (200, 201):
-                raise RuntimeError(f"Brevo HTTP error: {resp.status}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status not in (200, 201):
+                    raise RuntimeError(f"Brevo HTTP status: {resp.status}")
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Brevo HTTP {e.code} error: {err_body}") from e
 
     def open(self):
         if self.connection:
