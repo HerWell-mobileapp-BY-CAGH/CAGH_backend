@@ -164,19 +164,12 @@ class SendOTPView(APIView):
         serializer.is_valid(raise_exception=True)
 
         target = serializer.validated_data["phone_number_or_email"].strip()
+        if "@" in target:
+            target = target.lower()
         purpose = str(serializer.validated_data["purpose"])
 
         code = str(random.randint(100000, 999999))
         expires_at = timezone.now() + timedelta(minutes=10)
-
-        OTPVerification.objects.filter(phone_number_or_email__iexact=target, purpose=purpose).delete()
-
-        OTPVerification.objects.create(
-            phone_number_or_email=target,
-            otp_code=code,
-            purpose=purpose,
-            expires_at=expires_at,
-        )
 
         if "@" in target:
             try:
@@ -195,6 +188,19 @@ class SendOTPView(APIView):
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to send OTP email to {target}: {str(e)}")
+                return Response(
+                    {"error": f"Failed to send OTP email: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        OTPVerification.objects.filter(phone_number_or_email__iexact=target, purpose=purpose).delete()
+
+        OTPVerification.objects.create(
+            phone_number_or_email=target,
+            otp_code=code,
+            purpose=purpose,
+            expires_at=expires_at,
+        )
 
         masked = _mask_identifier(target)
 
@@ -495,21 +501,11 @@ class PasswordResetOTPRequestView(APIView):
         serializer.is_valid(raise_exception=True)
 
         target = serializer.validated_data["phone_number_or_email"].strip()
+        if "@" in target:
+            target = target.lower()
 
         code = str(random.randint(100000, 999999))
         expires_at = timezone.now() + timedelta(minutes=10)
-
-        OTPVerification.objects.filter(
-            phone_number_or_email__iexact=target,
-            purpose=OTPVerification.Purpose.PASSWORD_RESET,
-        ).delete()
-
-        OTPVerification.objects.create(
-            phone_number_or_email=target,
-            otp_code=code,
-            purpose=OTPVerification.Purpose.PASSWORD_RESET,
-            expires_at=expires_at,
-        )
 
         if "@" in target:
             try:
@@ -528,6 +524,22 @@ class PasswordResetOTPRequestView(APIView):
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to send Password Reset OTP email to {target}: {str(e)}")
+                return Response(
+                    {"error": f"Failed to send password reset OTP email: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        OTPVerification.objects.filter(
+            phone_number_or_email__iexact=target,
+            purpose=OTPVerification.Purpose.PASSWORD_RESET,
+        ).delete()
+
+        OTPVerification.objects.create(
+            phone_number_or_email=target,
+            otp_code=code,
+            purpose=OTPVerification.Purpose.PASSWORD_RESET,
+            expires_at=expires_at,
+        )
 
         masked = _mask_identifier(target)
 
