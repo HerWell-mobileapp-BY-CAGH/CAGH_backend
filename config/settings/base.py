@@ -4,6 +4,9 @@ from pathlib import Path
 from datetime import timedelta
 
 
+import dj_database_url
+
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -13,11 +16,27 @@ try:
 except ImportError:
     pass
 
-# Quick-start development settings - unsuitable for production
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-cagh-backend-default-key-change-me')
-DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
+# Security & Debug Settings
+DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,0.0.0.0,cagh-backend-api.onrender.com,.onrender.com').split(',')
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-cagh-backend-default-key-change-me'
+    else:
+        raise RuntimeError(
+            "CRITICAL: SECRET_KEY environment variable is missing! "
+            "Set a secure SECRET_KEY in your environment before deploying to production."
+        )
+
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get(
+        'ALLOWED_HOSTS',
+        'localhost,127.0.0.1,0.0.0.0,cagh-backend-api.onrender.com'
+    ).split(',')
+    if host.strip()
+]
 
 # Custom User Model & Authentication Backends
 AUTH_USER_MODEL = 'users.User'
@@ -93,12 +112,6 @@ WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
 # Database
-DB_NAME = os.environ.get('POSTGRES_DB', 'cagh_db')
-DB_USER = os.environ.get('POSTGRES_USER', 'cagh_user')
-DB_PASSWORD = os.environ.get('POSTGRES_PASSWORD', 'cagh_secure_password')
-DB_HOST = os.environ.get('POSTGRES_HOST', 'localhost')
-DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
-
 if 'test' in sys.argv:
     DATABASES = {
         'default': {
@@ -106,7 +119,27 @@ if 'test' in sys.argv:
             'NAME': BASE_DIR / 'test_db.sqlite3',
         }
     }
+elif os.environ.get('DATABASE_URL'):
+    DATABASES = {
+        'default': dj_database_url.config(
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
+    }
 else:
+    DB_NAME = os.environ.get('POSTGRES_DB', 'cagh_db')
+    DB_USER = os.environ.get('POSTGRES_USER', 'cagh_user')
+    DB_PASSWORD = os.environ.get('POSTGRES_PASSWORD')
+    if not DB_PASSWORD:
+        if DEBUG:
+            DB_PASSWORD = 'cagh_secure_password'
+        else:
+            raise RuntimeError(
+                "CRITICAL: POSTGRES_PASSWORD environment variable (or DATABASE_URL) must be set in production!"
+            )
+    DB_HOST = os.environ.get('POSTGRES_HOST', 'localhost')
+    DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
+
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -219,12 +252,29 @@ SPECTACULAR_SETTINGS = {
 }
 
 # CORS Configuration
-CORS_ALLOWED_ORIGINS = os.environ.get(
-    'CORS_ALLOWED_ORIGINS',
-    'http://localhost:3000,http://127.0.0.1:3000'
-).split(',')
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get(
+        'CORS_ALLOWED_ORIGINS',
+        'http://localhost:3000,http://127.0.0.1:3000'
+    ).split(',')
+    if origin.strip()
+]
 
-CORS_ALLOW_ALL_ORIGINS = DEBUG
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://localhost(:\d+)?$",
+    r"^http://127\.0\.0\.1(:\d+)?$",
+    r"^http://192\.168\.\d+\.\d+(:\d+)?$",
+    r"^http://10\.\d+\.\d+\.\d+(:\d+)?$",
+]
+
+_env_cors_regexes = os.environ.get('CORS_ALLOWED_ORIGIN_REGEXES', '').strip()
+if _env_cors_regexes:
+    CORS_ALLOWED_ORIGIN_REGEXES.extend(
+        [r.strip() for r in _env_cors_regexes.split(',') if r.strip()]
+    )
+
+CORS_ALLOW_ALL_ORIGINS = False
 
 # Channels Redis Layer
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
@@ -263,9 +313,9 @@ else:
     EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True').lower() == 'true'
     if EMAIL_USE_SSL and EMAIL_USE_TLS:
         EMAIL_USE_TLS = False
-EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', 'bitsuanabate45@gmail.com')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'iiwrhrzsizmsagdn')
-DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'bitsuanabate45@gmail.com')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER)
 
 # ---------------------------------------------------------------------------
 # Frontend URL (used in password reset emails)
@@ -274,3 +324,18 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
 # Password reset token validity (seconds) — default 24 h
 PASSWORD_RESET_TIMEOUT = int(os.environ.get('PASSWORD_RESET_TIMEOUT', 86400))
+
+# ---------------------------------------------------------------------------
+# Production Security Settings
+# ---------------------------------------------------------------------------
+if not DEBUG:
+    # Trust Render / Reverse Proxy SSL headers
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True').lower() == 'true'
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', 31536000))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
