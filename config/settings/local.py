@@ -10,3 +10,5 @@ if os.environ.get('USE_SQLITE', 'False').lower() == 'true':
             'NAME': BASE_DIR / 'db.sqlite3',
         }
     }
+
+

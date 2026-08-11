@@ -83,6 +83,8 @@ def _mask_identifier(target: str) -> str:
     return target
 
 
+
+
 def _token_pair_for(user: User) -> dict:
     refresh = RefreshToken.for_user(user)
     refresh["role"] = user.role
@@ -246,6 +248,8 @@ class VerifyOTPView(APIView):
         ).first()
 
 
+
+
         if not otp:
             return Response(
                 {"error": "Invalid or expired OTP code."},
@@ -300,6 +304,8 @@ class OTPLoginView(APIView):
         ).first() or User.objects.filter(
             email__iexact=target
         ).first()
+
+
 
         if not user:
             return Response(
