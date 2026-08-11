@@ -20,6 +20,7 @@ redis>=5.0.1
 
 # File Handling & Storage
 Pillow>=10.2.0
+whitenoise>=6.6.0
 
 # Testing & Utilities
 pytest>=8.0.0

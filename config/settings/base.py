@@ -38,6 +38,8 @@ ALLOWED_HOSTS = [
     if host.strip()
 ]
 
+
+
 # Custom User Model & Authentication Backends
 AUTH_USER_MODEL = 'users.User'
 AUTHENTICATION_BACKENDS = [
@@ -80,7 +82,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.locale.LocaleMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -179,6 +183,9 @@ LOCALE_PATHS = [
 # Static & Media Files
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -276,6 +283,8 @@ if _env_cors_regexes:
 
 CORS_ALLOW_ALL_ORIGINS = False
 
+
+
 # Channels Redis Layer
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 CHANNEL_LAYERS = {
@@ -339,3 +348,4 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', 31536000))
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+

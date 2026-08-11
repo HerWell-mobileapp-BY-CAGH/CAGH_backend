@@ -23,6 +23,9 @@ COPY . /app/
 # Expose port
 EXPOSE 8000
 
-# Default command to run migrations then launch ASGI application via Daphne
-CMD ["sh", "-c", "python manage.py migrate && daphne -b 0.0.0.0 -p 8000 config.asgi:application"]
+# Default command to run migrations, collect static files, then launch ASGI application via Daphne
+CMD ["sh", "-c", "python manage.py migrate && python manage.py collectstatic --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"]
+
+
+
 
