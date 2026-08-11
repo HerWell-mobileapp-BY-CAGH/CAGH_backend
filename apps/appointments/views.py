@@ -58,6 +58,24 @@ class AvailabilityViewSet(viewsets.ModelViewSet):
             serializer.save(midwife=self.request.user.midwife_profile)
 
 
+def _to_ethiopian_time(t):
+    """Converts a standard time object to Ethiopian local time string (e.g. 2:00 ጧት, 11:00 ማታ)."""
+    h = t.hour
+    m = t.minute
+    eth_h = (h - 6) % 12
+    if eth_h == 0:
+        eth_h = 12
+    if 6 <= h < 12:
+        period = "ጧት"
+    elif 12 <= h < 17:
+        period = "ቀን"
+    elif 17 <= h < 23:
+        period = "ማታ"
+    else:
+        period = "ሌሊት"
+    return f"{eth_h}:{m:02d} {period}"
+
+
 class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
     """
     FR-011: Appointment Availability Generator.
@@ -153,14 +171,18 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
                     "date": date_str,
                     "start_time": slot_start_time.strftime("%H:%M"),
                     "end_time": slot_end_time.strftime("%H:%M"),
+                    "start_time_12h": slot_start_time.strftime("%I:%M %p"),
+                    "end_time_12h": slot_end_time.strftime("%I:%M %p"),
+                    "start_time_ethiopian": _to_ethiopian_time(slot_start_time),
+                    "end_time_ethiopian": _to_ethiopian_time(slot_end_time),
                     "is_available": not is_booked,
                 })
 
                 curr_start += timedelta(minutes=30)
 
-        morning_slots = [s for s in generated_slots if int(s["start_time"].split(":")[0]) < 12]
+        morning_slots = [s for s in generated_slots if 9 <= int(s["start_time"].split(":")[0]) < 12]
         afternoon_slots = [s for s in generated_slots if 12 <= int(s["start_time"].split(":")[0]) < 17]
-        evening_slots = [s for s in generated_slots if int(s["start_time"].split(":")[0]) >= 17]
+        evening_slots = [s for s in generated_slots if 17 <= int(s["start_time"].split(":")[0]) < 21]
 
         return Response({
             "midwife_id": str(midwife.id),
