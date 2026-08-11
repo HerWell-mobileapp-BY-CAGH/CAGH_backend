@@ -159,7 +159,8 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
                 curr_start += timedelta(minutes=30)
 
         morning_slots = [s for s in generated_slots if int(s["start_time"].split(":")[0]) < 12]
-        afternoon_slots = [s for s in generated_slots if int(s["start_time"].split(":")[0]) >= 12]
+        afternoon_slots = [s for s in generated_slots if 12 <= int(s["start_time"].split(":")[0]) < 17]
+        evening_slots = [s for s in generated_slots if int(s["start_time"].split(":")[0]) >= 17]
 
         return Response({
             "midwife_id": str(midwife.id),
@@ -169,6 +170,7 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
             "available_slots_count": len([s for s in generated_slots if s["is_available"]]),
             "morning_slots": morning_slots,
             "afternoon_slots": afternoon_slots,
+            "evening_slots": evening_slots,
             "slots": generated_slots,
         }, status=status.HTTP_200_OK)
 
