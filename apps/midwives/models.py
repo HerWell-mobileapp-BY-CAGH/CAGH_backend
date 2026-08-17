@@ -29,11 +29,11 @@ class MidwifeProfile(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='midwife_profile')
     hospital = models.ForeignKey(Hospital, on_delete=models.SET_NULL, null=True, blank=True, related_name='midwives')
-    license_number = models.CharField(max_length=100, unique=True)
+    license_number = models.CharField(max_length=100, unique=True, help_text="Official unique medical license number")
     bio = models.TextField(blank=True)
-    experience_years = models.PositiveIntegerField(default=0)
-    languages = models.CharField(max_length=200, blank=True, default="English, Amharic")
-    cv_url = models.URLField(max_length=500, blank=True, null=True)
+    experience_years = models.PositiveIntegerField(default=0, help_text="Years of clinical midwifery experience")
+    languages = models.CharField(max_length=200, default="English, Amharic", help_text="Spoken languages")
+    cv_file = models.FileField(upload_to='midwives/cvs/', blank=True, null=True, help_text="Uploaded CV/Resume document")
     offered_consultation_types = models.JSONField(default=list, blank=True)
     verification_status = models.CharField(
         max_length=20,
@@ -81,7 +81,7 @@ class Certificate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     midwife = models.ForeignKey(MidwifeProfile, on_delete=models.CASCADE, related_name='certificates')
     title = models.CharField(max_length=200)
-    document_url = models.URLField(max_length=500)
+    document_file = models.FileField(upload_to='midwives/certificates/', blank=True, null=True)
     is_verified = models.BooleanField(default=False)
 
     def __str__(self):

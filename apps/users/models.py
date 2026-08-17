@@ -38,7 +38,7 @@ class Profile(models.Model):
     last_name = models.CharField(max_length=100, blank=True)
     gender = models.CharField(max_length=20, choices=Gender.choices, default=Gender.FEMALE)
     date_of_birth = models.DateField(null=True, blank=True)
-    profile_image = models.URLField(max_length=500, blank=True, null=True)
+    profile_image = models.ImageField(upload_to='profiles/', blank=True, null=True)
     region = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100, blank=True)
     preferred_language = models.CharField(max_length=10, choices=Language.choices, default=Language.ENGLISH)

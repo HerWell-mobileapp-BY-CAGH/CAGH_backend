@@ -30,6 +30,8 @@ class Facility(models.Model):
     available_services = models.JSONField(default=list, blank=True)
     latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    rating_average = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True, default=None, help_text="Average rating score out of 5.0 (Null if unrated)")
+    image = models.ImageField(upload_to='facilities/', blank=True, null=True, help_text="Facility photo image file")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)

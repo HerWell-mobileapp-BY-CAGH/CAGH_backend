@@ -57,7 +57,7 @@ class Message(models.Model):
 class Attachment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     message = models.OneToOneField(Message, on_delete=models.CASCADE, related_name='attachment')
-    file_url = models.URLField(max_length=500)
+    file = models.FileField(upload_to='chat/attachments/', blank=True, null=True)
     file_type = models.CharField(max_length=50)
     size = models.PositiveIntegerField(default=0, help_text="File size in bytes")
 

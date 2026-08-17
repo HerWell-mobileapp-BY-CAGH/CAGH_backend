@@ -1,10 +1,11 @@
 from django.db import models
 from django.utils import timezone
-from rest_framework import viewsets, permissions, status, generics
+from rest_framework import viewsets, permissions, status, generics, exceptions
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
+from apps.common.utils import log_audit
 from .models import Hospital, MidwifeProfile, Qualification, Certificate, Expertise, SavedMidwife, BlockedDate
 from .serializers import (
     HospitalSerializer,
@@ -115,17 +116,20 @@ class MidwifeProfileViewSet(viewsets.ModelViewSet):
             midwife.verified_by = request.user
             midwife.rejection_reason = ''
             midwife.save()
+            log_audit(user=request.user, action="MIDWIFE_VERIFY_APPROVE", request=request, details={"midwife_id": str(midwife.id)})
             return Response({'status': 'Midwife account approved successfully.'}, status=status.HTTP_200_OK)
 
         elif action_type == 'REJECT':
             midwife.verification_status = MidwifeProfile.VerificationStatus.REJECTED
             midwife.rejection_reason = request.data.get('reason', '')
             midwife.save()
+            log_audit(user=request.user, action="MIDWIFE_VERIFY_REJECT", request=request, details={"midwife_id": str(midwife.id), "reason": midwife.rejection_reason})
             return Response({'status': 'Midwife account rejected.'}, status=status.HTTP_200_OK)
 
         elif action_type == 'SUSPEND':
             midwife.verification_status = MidwifeProfile.VerificationStatus.SUSPENDED
             midwife.save()
+            log_audit(user=request.user, action="MIDWIFE_VERIFY_SUSPEND", request=request, details={"midwife_id": str(midwife.id)})
             return Response({'status': 'Midwife account suspended.'}, status=status.HTTP_200_OK)
 
         return Response(
@@ -141,11 +145,15 @@ class QualificationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if hasattr(self.request.user, 'midwife_profile'):
             return Qualification.objects.filter(midwife=self.request.user.midwife_profile)
+        if self.request.user.is_staff or getattr(self.request.user, 'role', '') == 'ADMIN':
+            return Qualification.objects.all()
         return Qualification.objects.none()
 
     def perform_create(self, serializer):
         if hasattr(self.request.user, 'midwife_profile'):
             serializer.save(midwife=self.request.user.midwife_profile)
+        else:
+            raise exceptions.PermissionDenied("Only registered midwives can add qualifications.")
 
 
 class CertificateViewSet(viewsets.ModelViewSet):
@@ -155,11 +163,21 @@ class CertificateViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if hasattr(self.request.user, 'midwife_profile'):
             return Certificate.objects.filter(midwife=self.request.user.midwife_profile)
+        if self.request.user.is_staff or getattr(self.request.user, 'role', '') == 'ADMIN':
+            return Certificate.objects.all()
         return Certificate.objects.none()
 
     def perform_create(self, serializer):
         if hasattr(self.request.user, 'midwife_profile'):
             serializer.save(midwife=self.request.user.midwife_profile)
+        else:
+            raise exceptions.PermissionDenied("Only registered midwives can add certificates.")
+
+
+class ExpertiseViewSet(viewsets.ModelViewSet):
+    queryset = Expertise.objects.all()
+    serializer_class = ExpertiseSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
 
 class BlockedDateViewSet(viewsets.ModelViewSet):
@@ -173,11 +191,15 @@ class BlockedDateViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         if hasattr(self.request.user, 'midwife_profile'):
             return BlockedDate.objects.filter(midwife=self.request.user.midwife_profile)
+        if self.request.user.is_staff or getattr(self.request.user, 'role', '') == 'ADMIN':
+            return BlockedDate.objects.all()
         return BlockedDate.objects.none()
 
     def perform_create(self, serializer):
         if hasattr(self.request.user, 'midwife_profile'):
             serializer.save(midwife=self.request.user.midwife_profile)
+        else:
+            raise exceptions.PermissionDenied("Only registered midwives can manage blocked dates.")
 
 
 class SavedMidwifeViewSet(viewsets.ModelViewSet):

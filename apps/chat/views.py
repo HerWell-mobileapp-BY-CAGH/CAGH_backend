@@ -137,14 +137,14 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
                 msg = serializer.save(chat_room=room, sender=request.user)
 
                 # Process media attachment (Image, PDF, Voice Note)
-                file_url = request.data.get('file_url')
-                file_type = request.data.get('file_type')
+                file_obj = request.FILES.get('file') or request.data.get('file') or request.data.get('file_url')
+                file_type = request.data.get('file_type', 'application/octet-stream')
                 file_size = request.data.get('file_size', 0)
 
-                if file_url and file_type:
+                if file_obj:
                     Attachment.objects.create(
                         message=msg,
-                        file_url=file_url,
+                        file=file_obj,
                         file_type=file_type,
                         size=file_size,
                     )

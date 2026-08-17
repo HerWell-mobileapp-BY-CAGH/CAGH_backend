@@ -38,6 +38,7 @@ class MidwifeManagementTestCase(APITestCase):
             experience_years=5,
             bio="Experienced certified midwife specializing in adolescent maternal care.",
             languages="English, Amharic, Oromiffa",
+            cv_file="midwives/cvs/mary_cv.pdf",
             offered_consultation_types=["IN_PERSON", "VIRTUAL_VOICE"],
         )
 

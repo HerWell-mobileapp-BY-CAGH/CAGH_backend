@@ -39,6 +39,9 @@ class BlockedDateSerializer(serializers.ModelSerializer):
 class MidwifeProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     hospital = HospitalSerializer(read_only=True)
+    hospital_id = serializers.PrimaryKeyRelatedField(
+        queryset=Hospital.objects.all(), source='hospital', required=False, allow_null=True, write_only=True
+    )
     qualifications = QualificationSerializer(many=True, read_only=True)
     certificates = CertificateSerializer(many=True, read_only=True)
     expertises = ExpertiseSerializer(many=True, read_only=True)
@@ -51,6 +54,35 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
             'id', 'user', 'verification_status', 'verified_at',
             'verified_by', 'rejection_reason', 'created_at', 'updated_at'
         )
+        extra_kwargs = {
+            'license_number': {'required': True, 'allow_blank': False},
+            'languages': {'required': True, 'allow_blank': False},
+            'experience_years': {'required': True},
+        }
+
+    def validate(self, attrs):
+        # Validate that cv_url, hospital, license_number, experience_years, and languages are provided
+        instance = getattr(self, 'instance', None)
+        
+        cv_file = attrs.get('cv_file', getattr(instance, 'cv_file', None) if instance else None)
+        hospital = attrs.get('hospital', instance.hospital if instance else None)
+        license_number = attrs.get('license_number', instance.license_number if instance else None)
+        languages = attrs.get('languages', instance.languages if instance else None)
+
+        errors = {}
+        if not cv_file:
+            errors['cv_file'] = "CV / Resume document file is required."
+        if not hospital:
+            errors['hospital'] = "Affiliated Hospital facility is required."
+        if not license_number or not str(license_number).strip():
+            errors['license_number'] = "Medical license number is required."
+        if not languages or not str(languages).strip():
+            errors['languages'] = "Spoken languages field is required."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return attrs
 
     def get_is_favorite(self, obj):
         request = self.context.get('request')
