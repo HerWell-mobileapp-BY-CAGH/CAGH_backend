@@ -24,4 +24,4 @@ COPY . /app/
 EXPOSE 8000
 
 # Default command to run migrations, reset admin, collect static files, then launch ASGI application via Daphne
-CMD ["sh", "-c", "python manage.py migrate && python manage.py reset_admin && python manage.py collectstatic --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"]
+CMD ["sh", "-c", "python manage.py migrate && python manage.py reset_admin && python manage.py seed_facilities && python manage.py collectstatic --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"]
