@@ -3,12 +3,128 @@ from apps.common.models import Facility
 
 
 class Command(BaseCommand):
-    help = "Seed accurate and detailed healthcare facilities in Ethiopia (Addis Ababa area)"
+    help = "Seed accurate and detailed healthcare facilities in Ethiopia (Addis Ababa & Akaki Kality area)"
 
     def handle(self, *args, **kwargs):
         self.stdout.write("Seeding accurate Ethiopian healthcare facilities data...")
 
         facilities_data = [
+            # --- Akaki Kality / Saris / Tulu Dimtu Area (Coordinates around lat ~8.89, lng ~38.80) ---
+            {
+                "name": "Tirunesh Beijing General Hospital",
+                "facility_type": "HOSPITAL",
+                "address": "Akaki Kality Sub-City, Debrezeit Road",
+                "city": "Addis Ababa",
+                "region": "Addis Ababa",
+                "phone_number": "+251114340066",
+                "operating_hours": "24/7 Emergency & Maternity Services",
+                "available_services": [
+                    "Maternal & Child Health",
+                    "Emergency Obstetric Care",
+                    "Delivery & Childbirth",
+                    "General Surgery & Pediatrics",
+                    "ANC & Postnatal Care",
+                ],
+                "latitude": 8.885000,
+                "longitude": 38.808000,
+                "rating_average": 4.50,
+                "is_active": True,
+            },
+            {
+                "name": "Akaki Health Center",
+                "facility_type": "HEALTH_CENTER",
+                "address": "Woreda 01, Akaki Kality Sub-City",
+                "city": "Addis Ababa",
+                "region": "Addis Ababa",
+                "phone_number": "+251114340112",
+                "operating_hours": "Mon-Fri: 8:00 AM - 5:30 PM, Sat: 8:00 AM - 12:30 PM",
+                "available_services": [
+                    "Primary Maternal Care",
+                    "Routine ANC Checkups",
+                    "Immunization & Child Health",
+                    "Family Planning Services",
+                ],
+                "latitude": 8.891000,
+                "longitude": 38.798000,
+                "rating_average": 4.20,
+                "is_active": True,
+            },
+            {
+                "name": "Kenema Pharmacy (Akaki Kality Branch)",
+                "facility_type": "PHARMACY",
+                "address": "Main Road, Akaki Kality Sub-City",
+                "city": "Addis Ababa",
+                "region": "Addis Ababa",
+                "phone_number": "+251114341599",
+                "operating_hours": "24/7 Open",
+                "available_services": [
+                    "Essential Maternal Medicines",
+                    "Iron & Calcium Supplements",
+                    "Prenatal Vitamins",
+                    "Contraceptives & Family Planning",
+                ],
+                "latitude": 8.896500,
+                "longitude": 38.804500,
+                "rating_average": 4.60,
+                "is_active": True,
+            },
+            {
+                "name": "Kality Health Center",
+                "facility_type": "HEALTH_CENTER",
+                "address": "Near Total Station, Kality, Akaki Sub-City",
+                "city": "Addis Ababa",
+                "region": "Addis Ababa",
+                "phone_number": "+251114390233",
+                "operating_hours": "Mon-Sat: 8:00 AM - 6:00 PM",
+                "available_services": [
+                    "Antenatal Care (ANC)",
+                    "Basic Emergency Obstetric Care",
+                    "Childhood Vaccination",
+                    "Nutrition & Health Education",
+                ],
+                "latitude": 8.905000,
+                "longitude": 38.788000,
+                "rating_average": 4.10,
+                "is_active": True,
+            },
+            {
+                "name": "Tulu Dimtu Hospital",
+                "facility_type": "HOSPITAL",
+                "address": "Tulu Dimtu Area, Akaki Kality Sub-City",
+                "city": "Addis Ababa",
+                "region": "Addis Ababa",
+                "phone_number": "+251114348899",
+                "operating_hours": "24/7 Emergency",
+                "available_services": [
+                    "Maternal Wards",
+                    "Obstetric & Pediatric Care",
+                    "Ultrasound & Lab Diagnostics",
+                ],
+                "latitude": 8.872000,
+                "longitude": 38.815000,
+                "rating_average": 4.30,
+                "is_active": True,
+            },
+            {
+                "name": "St. Mary Medical & Diagnostic Clinic",
+                "facility_type": "CLINIC",
+                "address": "Akaki Main Road, Near Bus Station",
+                "city": "Addis Ababa",
+                "region": "Addis Ababa",
+                "phone_number": "+251114342244",
+                "operating_hours": "Mon-Sun: 8:00 AM - 8:00 PM",
+                "available_services": [
+                    "General Outpatient",
+                    "Maternal Health Checkups",
+                    "Laboratory Blood & Urine Tests",
+                ],
+                "latitude": 8.894000,
+                "longitude": 38.806000,
+                "rating_average": 4.40,
+                "is_active": True,
+            },
+
+            # --- Central Addis Ababa Area (Coordinates around lat ~9.01 - 9.05, lng ~38.75) ---
             {
                 "name": "Tikur Anbessa (Black Lion) Specialized Hospital",
                 "facility_type": "HOSPITAL",
