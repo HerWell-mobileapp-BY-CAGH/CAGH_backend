@@ -79,6 +79,18 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
         if not languages or not str(languages).strip():
             errors['languages'] = "Spoken languages field is required."
 
+        # Sensitive credentials lock for approved midwives
+        request = self.context.get('request')
+        is_admin = request and request.user and (request.user.is_staff or getattr(request.user, 'role', '') == 'ADMIN')
+        
+        if instance and instance.verification_status == MidwifeProfile.VerificationStatus.APPROVED and not is_admin:
+            if 'license_number' in attrs and attrs['license_number'] != instance.license_number:
+                errors['license_number'] = "Medical license number is locked after approval. Contact Admin to update official credentials."
+            if 'cv_file' in attrs and attrs['cv_file'] != instance.cv_file:
+                errors['cv_file'] = "CV document is locked after approval. Contact Admin to update official credentials."
+            if 'hospital' in attrs and attrs['hospital'] != instance.hospital:
+                errors['hospital'] = "Affiliated hospital is locked after approval. Contact Admin to update official credentials."
+
         if errors:
             raise serializers.ValidationError(errors)
 

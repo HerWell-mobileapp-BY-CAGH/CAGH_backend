@@ -15,6 +15,7 @@ from .serializers import (
 )
 from apps.appointments.models import Appointment
 from apps.notifications.models import Notification
+from apps.notifications.call_notifications import send_incoming_call_notification
 
 
 class ConsultationViewSet(viewsets.ModelViewSet):
@@ -84,7 +85,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @extend_schema(summary="Start consultation lifecycle", tags=["Consultations"])
+    @extend_schema(summary="Start consultation lifecycle & trigger device call ringing", tags=["Consultations"])
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
         consultation = self.get_object()
@@ -97,17 +98,30 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             consultation.started_at = timezone.now()
         consultation.save()
 
+        session_key = None
+        call_type = "VOICE"
         # Automatically initiate Voice or Video session if virtual consultation type
-        if consultation.consultation_type == Consultation.ConsultationType.VIRTUAL_VOICE:
-            VoiceSession.objects.get_or_create(
+        if consultation.consultation_type == Consultation.ConsultationType.VIRTUAL_VOICE or consultation.consultation_type == 'VIRTUAL_VOICE':
+            session, _ = VoiceSession.objects.get_or_create(
                 consultation=consultation,
                 defaults={"session_key": f"VOICE-{uuid.uuid4().hex[:12].upper()}", "status": VoiceSession.VoiceSessionStatus.INITIATED}
             )
-        elif consultation.consultation_type == Consultation.ConsultationType.VIRTUAL_VIDEO:
-            VideoSession.objects.get_or_create(
+            session_key = session.session_key
+            call_type = "VOICE"
+        elif consultation.consultation_type == Consultation.ConsultationType.VIRTUAL_VIDEO or consultation.consultation_type == 'VIRTUAL_VIDEO':
+            session, _ = VideoSession.objects.get_or_create(
                 consultation=consultation,
                 defaults={"session_key": f"VIDEO-{uuid.uuid4().hex[:12].upper()}", "status": VideoSession.VideoSessionStatus.INITIATED}
             )
+            session_key = session.session_key
+            call_type = "VIDEO"
+
+        # Determine caller vs recipient
+        caller = request.user
+        recipient = consultation.user if (hasattr(caller, 'midwife_profile') and caller.midwife_profile == consultation.midwife) else consultation.midwife.user
+
+        # Trigger incoming call push notification to ring peer device
+        send_incoming_call_notification(caller=caller, recipient=recipient, consultation=consultation, call_type=call_type, session_key=session_key)
 
         serializer = self.get_serializer(consultation)
         return Response({'status': 'ACTIVE', 'started_at': consultation.started_at, 'consultation': serializer.data}, status=status.HTTP_200_OK)

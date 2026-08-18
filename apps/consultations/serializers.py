@@ -30,6 +30,11 @@ class VoiceSessionSerializer(serializers.ModelSerializer):
         return f"RTC_TOKEN_{obj.session_key}"
 
     def get_ws_signaling_url(self, obj):
+        request = self.context.get('request')
+        if request:
+            host = request.get_host()
+            scheme = 'wss' if request.is_secure() else 'ws'
+            return f"{scheme}://{host}/ws/consultation/{obj.consultation_id}/"
         return f"ws://localhost:8000/ws/consultation/{obj.consultation_id}/"
 
 
@@ -50,6 +55,11 @@ class VideoSessionSerializer(serializers.ModelSerializer):
         return f"RTC_TOKEN_{obj.session_key}"
 
     def get_ws_signaling_url(self, obj):
+        request = self.context.get('request')
+        if request:
+            host = request.get_host()
+            scheme = 'wss' if request.is_secure() else 'ws'
+            return f"{scheme}://{host}/ws/consultation/{obj.consultation_id}/"
         return f"ws://localhost:8000/ws/consultation/{obj.consultation_id}/"
 
 
