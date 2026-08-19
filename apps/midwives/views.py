@@ -83,21 +83,29 @@ class MidwifeProfileViewSet(viewsets.ModelViewSet):
     @extend_schema(summary="Get or update authenticated midwife's own profile", tags=["Midwives"])
     @action(detail=False, methods=['get', 'patch', 'put'], permission_classes=[permissions.IsAuthenticated])
     def me(self, request):
-        try:
-            profile = request.user.midwife_profile
-        except MidwifeProfile.DoesNotExist:
+        user = request.user
+        if getattr(user, 'role', '') != 'MIDWIFE' and not hasattr(user, 'midwife_profile'):
             return Response(
-                {"error": "Authenticated user does not have a midwife profile."},
-                status=status.HTTP_404_NOT_FOUND,
+                {"error": "Authenticated user is registered as a PATIENT, not a MIDWIFE. Only midwife accounts have a midwife profile."},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
+        import uuid
+        profile, _ = MidwifeProfile.objects.get_or_create(
+            user=user,
+            defaults={
+                "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
+                "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+            }
+        )
+
         if request.method in ['PATCH', 'PUT']:
-            serializer = self.get_serializer(profile, data=request.data, partial=(request.method == 'PATCH'))
+            serializer = self.get_serializer(profile, data=request.data, partial=(request.method == 'PATCH'), context={'request': request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
             return Response(serializer.data)
 
-        serializer = self.get_serializer(profile)
+        serializer = self.get_serializer(profile, context={'request': request})
         return Response(serializer.data)
 
     @extend_schema(

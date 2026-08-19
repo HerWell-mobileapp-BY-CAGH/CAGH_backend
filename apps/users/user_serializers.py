@@ -39,6 +39,7 @@ class ProfileSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     profile = ProfileSerializer(read_only=True)
     preferences = UserPreferenceSerializer(read_only=True)
+    midwife_profile = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -50,12 +51,19 @@ class UserSerializer(serializers.ModelSerializer):
             "phone_number",
             "profile",
             "preferences",
+            "midwife_profile",
         )
         read_only_fields = ("id", "role")
         extra_kwargs = {
             "username": {"required": False, "allow_null": True, "allow_blank": True},
             "email": {"required": False, "allow_null": True, "allow_blank": True},
         }
+
+    def get_midwife_profile(self, obj):
+        if hasattr(obj, 'midwife_profile'):
+            from apps.midwives.serializers import MidwifeProfileSerializer
+            return MidwifeProfileSerializer(obj.midwife_profile, context=self.context).data
+        return None
 
 
 
