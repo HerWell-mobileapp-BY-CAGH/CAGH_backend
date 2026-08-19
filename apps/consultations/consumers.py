@@ -77,6 +77,24 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            if recipient_id:
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'broadcast_incoming_call',
+                        'data': {
+                            'type': 'incoming_call_offer',
+                            'consultation_id': self.consultation_id,
+                            'sender_id': str(user.id),
+                            'sender_name': user.username,
+                            'call_type': call_type,
+                            'sdp_offer': sdp_offer,
+                            'rtc_token': rtc_token,
+                        }
+                    }
+                )
+
         # 2. Call Answer (Accepting incoming call)
         elif action_type == 'call_answer':
             sdp_answer = data.get('sdp_answer')
@@ -270,3 +288,55 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
 
         except Exception:
             pass
+
+    @database_sync_to_async
+    def get_recipient_user_id(self, consultation_id, sender_user):
+        try:
+            from apps.appointments.models import Appointment
+            consultation = Consultation.objects.filter(id=consultation_id).first()
+            if not consultation:
+                appointment = Appointment.objects.filter(id=consultation_id).first()
+                if appointment:
+                    if sender_user == appointment.user and appointment.midwife and hasattr(appointment.midwife, 'user'):
+                        return str(appointment.midwife.user.id)
+                    elif appointment.user:
+                        return str(appointment.user.id)
+            elif consultation:
+                if sender_user == consultation.user and consultation.midwife and hasattr(consultation.midwife, 'user'):
+                    return str(consultation.midwife.user.id)
+                elif consultation.user:
+                    return str(consultation.user.id)
+        except Exception:
+            pass
+        return None
+
+
+class UserCallConsumer(AsyncWebsocketConsumer):
+    """
+    Persistent background WebSocket consumer for user call signaling (ws/user-calls/).
+    Rings incoming calls across all tabs and screens.
+    """
+
+    async def connect(self):
+        user = self.scope.get('user')
+        if not user or user.is_anonymous:
+            await self.close(code=4001)
+            return
+
+        self.user_group = f"user_calls_{user.id}"
+        await self.channel_layer.group_add(
+            self.user_group,
+            self.channel_name
+        )
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, 'user_group'):
+            await self.channel_layer.group_discard(
+                self.user_group,
+                self.channel_name
+            )
+
+    async def broadcast_incoming_call(self, event):
+        await self.send(text_data=json.dumps(event['data']))
+
