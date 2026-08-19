@@ -32,6 +32,15 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         )
         await self.accept()
 
+        await self.channel_layer.group_send(
+            self.group_name,
+            {
+                'type': 'broadcast_peer_joined',
+                'sender_id': str(user.id),
+                'sender_name': user.username,
+            }
+        )
+
     async def disconnect(self, close_code):
         if hasattr(self, 'group_name'):
             await self.channel_layer.group_discard(
@@ -161,6 +170,13 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             'type': 'call_ended',
             'sender_id': event['sender_id'],
             'ended_at': event['ended_at'],
+        }))
+
+    async def broadcast_peer_joined(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'peer_joined',
+            'sender_id': event['sender_id'],
+            'sender_name': event['sender_name'],
         }))
 
     @database_sync_to_async

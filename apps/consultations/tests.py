@@ -230,6 +230,8 @@ class ConsultationManagementTestCase(APITestCase):
         )
         connected, _ = await communicator.connect()
         self.assertTrue(connected)
+        res_peer = await communicator.receive_json_from()
+        self.assertEqual(res_peer["type"], "peer_joined")
 
         # 1. Send call_offer
         await communicator.send_json_to({
