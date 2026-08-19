@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.utils import timezone
+from django.conf import settings
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -43,6 +44,32 @@ class ConsultationViewSet(viewsets.ModelViewSet):
 
         return queryset.filter(user=user)
 
+
+    def get_object(self):
+        pk = self.kwargs.get('pk')
+        consultation = Consultation.objects.filter(id=pk).first()
+
+        if not consultation:
+            appointment = Appointment.objects.filter(id=pk).first()
+            if appointment:
+                consultation = getattr(appointment, 'consultation', None)
+                if not consultation:
+                    consultation, _ = Consultation.objects.get_or_create(
+                        appointment=appointment,
+                        defaults={
+                            'user': appointment.user,
+                            'midwife': appointment.midwife,
+                            'consultation_type': appointment.appointment_type,
+                            'status': Consultation.ConsultationStatus.SCHEDULED,
+                        }
+                    )
+
+        if not consultation:
+            from rest_framework.exceptions import NotFound
+            raise NotFound("No active consultation or appointment record found matching the provided ID.")
+
+        self.check_object_permissions(self.request, consultation)
+        return consultation
 
     def perform_create(self, serializer):
         appointment = serializer.validated_data['appointment']
@@ -88,28 +115,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     @extend_schema(summary="Start consultation lifecycle & trigger device call ringing", tags=["Consultations"])
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
-        # 1. Try finding Consultation by primary key
-        consultation = Consultation.objects.filter(id=pk).first()
-
-        # 2. If not found by Consultation ID, check if pk is an Appointment ID
-        if not consultation:
-            appointment = Appointment.objects.filter(id=pk).first()
-            if appointment:
-                consultation, _ = Consultation.objects.get_or_create(
-                    appointment=appointment,
-                    defaults={
-                        'user': appointment.user,
-                        'midwife': appointment.midwife,
-                        'consultation_type': appointment.appointment_type,
-                        'status': Consultation.ConsultationStatus.SCHEDULED,
-                    }
-                )
-
-        if not consultation:
-            return Response(
-                {"error": "No active consultation or appointment record found matching the provided ID."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        consultation = self.get_object()
 
         if consultation.status == Consultation.ConsultationStatus.COMPLETED:
             return Response({"error": "Completed consultations cannot be restarted."}, status=status.HTTP_400_BAD_REQUEST)
@@ -147,8 +153,25 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         except Exception:
             pass
 
+        channel_name = f"cagh_consultation_{consultation.id}"
+        ws_url = f"wss://cagh-backend-api.onrender.com/ws/consultation/{consultation.id}/"
+        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_test_app_id')
+
         serializer = self.get_serializer(consultation)
-        return Response({'status': 'ACTIVE', 'started_at': consultation.started_at, 'consultation': serializer.data}, status=status.HTTP_200_OK)
+        return Response({
+            'status': 'ACTIVE',
+            'started_at': consultation.started_at,
+            'call_type': call_type,
+            'session_key': session_key,
+            'channel_name': channel_name,
+            'agora_app_id': agora_app_id,
+            'agora_token': f"TOKEN-{session_key}",
+            'ws_url': ws_url,
+            'caller_id': str(caller.id),
+            'recipient_id': str(recipient.id) if recipient else "",
+            'recipient_name': getattr(recipient, 'username', 'Midwife'),
+            'consultation': serializer.data,
+        }, status=status.HTTP_200_OK)
 
     @extend_schema(summary="Complete consultation & record diagnosis/summary", tags=["Consultations"])
     @action(detail=True, methods=['post'])
