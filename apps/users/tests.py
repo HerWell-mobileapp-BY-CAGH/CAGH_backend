@@ -193,7 +193,7 @@ class UserManagementTestCase(APITestCase):
         res = self.client.post(url, {"latitude": "9.030000", "longitude": "38.740000"}, format="json")
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data["status"], "SOS_TRIGGERED")
-        self.assertEqual(res.data["call_url"], "tel:907")
+        self.assertEqual(res.data["call_url"], "tel:0996717744")
         self.assertIn("hotlines", res.data)
         self.assertIn("location", res.data)
 
@@ -201,7 +201,7 @@ class UserManagementTestCase(APITestCase):
         url = reverse("sos-log-hotlines")
         res = self.client.get(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data["default_call_url"], "tel:907")
+        self.assertEqual(res.data["default_call_url"], "tel:0996717744")
         self.assertGreater(len(res.data["hotlines"]), 0)
 
 

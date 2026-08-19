@@ -702,8 +702,9 @@ class SOSLogViewSet(viewsets.ModelViewSet):
         return Response({
             "status": "SOS_TRIGGERED",
             "message": "Emergency SOS triggered. Location logged and emergency contacts alerted.",
-            "call_url": "tel:907",
+            "call_url": "tel:0996717744",
             "hotlines": [
+                {"name": "Emergency Hotline (Test Line)", "number": "0996717744", "call_url": "tel:0996717744"},
                 {"name": "National Health & Ambulance Hotline", "number": "907", "call_url": "tel:907"},
                 {"name": "Police Emergency", "number": "991", "call_url": "tel:991"},
                 {"name": "Women & Children Support Hotline", "number": "952", "call_url": "tel:952"},
@@ -721,9 +722,13 @@ class SOSLogViewSet(viewsets.ModelViewSet):
     @extend_schema(summary="Get emergency hotlines list", tags=["Emergency SOS"])
     @action(detail=False, methods=['get'])
     def hotlines(self, request):
+        contacts_count = EmergencyContact.objects.filter(user=request.user).count() if request.user and request.user.is_authenticated else 0
         return Response({
-            "default_call_url": "tel:907",
+            "default_call_url": "tel:0996717744",
+            "primary_hotline_number": "0996717744",
+            "saved_contacts_count": contacts_count,
             "hotlines": [
+                {"name": "Emergency Hotline (Test Line)", "number": "0996717744", "call_url": "tel:0996717744"},
                 {"name": "National Health & Ambulance Hotline", "number": "907", "call_url": "tel:907"},
                 {"name": "Police Emergency", "number": "991", "call_url": "tel:991"},
                 {"name": "Women & Children Support Hotline", "number": "952", "call_url": "tel:952"},
