@@ -1,6 +1,10 @@
 from datetime import date, timedelta
 from django.urls import reverse
 from rest_framework import status
+from django.utils import timezone
+from channels.testing import WebsocketCommunicator
+from config.asgi import application
+from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 
@@ -262,4 +266,54 @@ class ConsultationManagementTestCase(APITestCase):
         self.assertTrue(res_media["is_muted"])
 
         await communicator.disconnect()
+
+    async def test_user_calls_websocket_notification(self):
+        from asgiref.sync import sync_to_async
+        appointment = await sync_to_async(Appointment.objects.create)(
+            user=self.patient,
+            created_by=self.patient,
+            midwife=self.midwife_profile,
+            appointment_type="VIRTUAL_VOICE",
+            scheduled_date=timezone.now().date(),
+            start_time="10:00:00",
+            end_time="10:30:00",
+            status="CONFIRMED"
+        )
+        consultation = await sync_to_async(Consultation.objects.create)(
+            appointment=appointment,
+            user=self.patient,
+            midwife=self.midwife_profile,
+            consultation_type="VIRTUAL_VOICE",
+            status="SCHEDULED",
+        )
+
+        midwife_user = self.midwife_profile.user
+        midwife_token = str(AccessToken.for_user(midwife_user))
+        patient_token = str(AccessToken.for_user(self.patient))
+
+        midwife_communicator = WebsocketCommunicator(
+            application,
+            f"/ws/user-calls/?token={midwife_token}"
+        )
+        connected, _ = await midwife_communicator.connect()
+        self.assertTrue(connected)
+
+        patient_communicator = WebsocketCommunicator(
+            application,
+            f"/ws/consultation/{consultation.id}/?token={patient_token}"
+        )
+        await patient_communicator.connect()
+
+        await patient_communicator.send_json_to({
+            "action": "call_offer",
+            "call_type": "VOICE",
+            "sdp_offer": "dummy_sdp_offer_data"
+        })
+
+        res_call = await midwife_communicator.receive_json_from()
+        self.assertEqual(res_call["type"], "incoming_call_offer")
+        self.assertEqual(res_call["consultation_id"], str(consultation.id))
+
+        await midwife_communicator.disconnect()
+        await patient_communicator.disconnect()
 
