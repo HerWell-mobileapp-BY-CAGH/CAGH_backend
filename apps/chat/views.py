@@ -1,3 +1,5 @@
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.db import models
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
@@ -51,7 +53,7 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         initial_text = serializer.validated_data.pop('initial_message', None)
         room = serializer.save(user=self.request.user, status=ChatRoom.RoomStatus.REQUESTED)
 
-        # Create initial text message if provided by user
+        # Create initial text message if provided by user (TikTok request style)
         if initial_text:
             Message.objects.create(
                 chat_room=room,
@@ -122,24 +124,24 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         room = self.get_object()
         if request.method == 'GET':
             messages = room.messages.select_related('sender', 'attachment').order_by('sent_at')
-            serializer = MessageSerializer(messages, many=True)
+            serializer = MessageSerializer(messages, many=True, context={'request': request})
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         elif request.method == 'POST':
             if room.status != ChatRoom.RoomStatus.ACCEPTED:
                 return Response(
-                    {'error': 'Cannot send messages until the chat request has been accepted by the midwife.'},
+                    {'error': 'Chat request pending acceptance. You cannot send further messages until the midwife accepts the request.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            serializer = MessageSerializer(data=request.data)
+            serializer = MessageSerializer(data=request.data, context={'request': request})
             if serializer.is_valid():
                 msg = serializer.save(chat_room=room, sender=request.user)
 
-                # Process media attachment (Image, PDF, Voice Note)
-                file_obj = request.FILES.get('file') or request.data.get('file') or request.data.get('file_url')
+                # Process media attachment (Image, PDF, Voice Note) uploaded directly as file
+                file_obj = request.FILES.get('file') or request.data.get('file')
                 file_type = request.data.get('file_type', 'application/octet-stream')
-                file_size = request.data.get('file_size', 0)
+                file_size = request.data.get('file_size', getattr(file_obj, 'size', 0) if file_obj else 0)
 
                 if file_obj:
                     Attachment.objects.create(
@@ -150,7 +152,35 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
                     )
 
                 room.save(update_fields=['updated_at'])
-                return Response(MessageSerializer(msg).data, status=status.HTTP_201_CREATED)
+
+                serialized_msg = MessageSerializer(msg, context={'request': request}).data
+
+                # Real-time WebSocket broadcast to active room subscribers
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    try:
+                        async_to_sync(channel_layer.group_send)(
+                            f'chat_{room.id}',
+                            {
+                                'type': 'chat_message',
+                                'message': serialized_msg,
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                # Notify recipient
+                recipient = room.midwife.user if request.user == room.user else room.user
+                Notification.objects.create(
+                    user=recipient,
+                    title=f"New message from {request.user.username}",
+                    body=msg.content[:100] if msg.content else "Sent an attachment",
+                    type="CHAT",
+                    action="CHAT_MESSAGE",
+                    reference_id=str(room.id),
+                )
+
+                return Response(serialized_msg, status=status.HTTP_201_CREATED)
 
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -163,11 +193,29 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         unread = room.messages.exclude(sender=request.user).filter(
             status__in=[Message.MessageStatus.SENT, Message.MessageStatus.DELIVERED]
         )
+        read_ids = [str(m.id) for m in unread]
         count = unread.update(status=Message.MessageStatus.READ, read_at=now)
+
+        if count > 0:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                try:
+                    async_to_sync(channel_layer.group_send)(
+                        f'chat_{room.id}',
+                        {
+                            'type': 'messages_read',
+                            'reader_id': str(request.user.id),
+                            'read_at': now.isoformat(),
+                            'message_ids': read_ids,
+                        }
+                    )
+                except Exception:
+                    pass
 
         return Response({
             'status': 'READ',
             'marked_read_count': count,
             'read_at': now,
         }, status=status.HTTP_200_OK)
+
 

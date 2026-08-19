@@ -5,10 +5,20 @@ from apps.midwives.serializers import MidwifeProfileSerializer
 
 
 class AttachmentSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Attachment
-        fields = '__all__'
+        fields = ('id', 'message', 'file', 'file_url', 'file_type', 'size')
         read_only_fields = ('id', 'message')
+
+    def get_file_url(self, obj):
+        if obj.file:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
 
 
 class MessageSerializer(serializers.ModelSerializer):

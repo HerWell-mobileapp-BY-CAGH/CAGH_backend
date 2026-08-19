@@ -50,7 +50,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             file_type = data.get('file_type')
             file_size = data.get('file_size', 0)
 
-            msg_data = await self.save_message(
+            msg_data, err_code = await self.save_message(
                 room_id=self.room_id,
                 sender=user,
                 content=content,
@@ -68,6 +68,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         'message': msg_data
                     }
                 )
+            elif err_code == 'REQUEST_PENDING':
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'code': 'REQUEST_PENDING',
+                    'message': 'Chat request pending acceptance. You cannot send further messages until the midwife accepts the request.'
+                }))
+            else:
+                await self.send(text_data=json.dumps({
+                    'type': 'error',
+                    'code': 'MESSAGE_FAILED',
+                    'message': 'Failed to send message.'
+                }))
 
         elif action_type == 'read_receipt':
             read_ids = await self.mark_messages_as_read(self.room_id, user)
@@ -130,7 +142,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             room = ChatRoom.objects.get(id=room_id)
             if room.status != ChatRoom.RoomStatus.ACCEPTED:
-                return None
+                return None, 'REQUEST_PENDING'
 
             msg = Message.objects.create(
                 chat_room=room,
@@ -143,7 +155,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if file_url and file_type:
                 Attachment.objects.create(
                     message=msg,
-                    file_url=file_url,
+                    file=file_url,
                     file_type=file_type,
                     size=file_size,
                 )
@@ -152,9 +164,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             room.save(update_fields=['updated_at'])
 
             from .serializers import MessageSerializer
-            return MessageSerializer(msg).data
+            return MessageSerializer(msg).data, None
         except Exception:
-            return None
+            return None, 'ERROR'
 
     @database_sync_to_async
     def mark_messages_as_read(self, room_id, reader_user):
