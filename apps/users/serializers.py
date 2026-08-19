@@ -73,7 +73,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         style={"input_type": "password"},
         help_text="Must match password.",
     )
-    full_name = serializers.CharField(max_length=200, write_only=True, required=False, allow_blank=True)
+    full_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
     first_name = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
     last_name = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
     date_of_birth = serializers.DateField(write_only=True, required=False, allow_null=True)
@@ -148,7 +148,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     # ---- Create ----
 
     def create(self, validated_data):
-        full_name = validated_data.pop("full_name", "")
         first_name = validated_data.pop("first_name", "")
         last_name = validated_data.pop("last_name", "")
         date_of_birth = validated_data.pop("date_of_birth", None)
@@ -157,6 +156,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         validated_data.pop("otp_code", None)
         validated_data.pop("password_confirm", None)
         password = validated_data.pop("password", None)
+        full_name = validated_data.pop("full_name", "")
 
         # Derive first_name and last_name from full_name if necessary
         if full_name and not (first_name or last_name):

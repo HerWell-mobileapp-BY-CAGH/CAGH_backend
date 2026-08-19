@@ -608,6 +608,14 @@ class UserMeView(generics.RetrieveUpdateAPIView):
 
     @extend_schema(summary="Update current user", tags=["Users"])
     def patch(self, request, *args, **kwargs):
+        user = request.user
+        exp = request.data.get('experience_years')
+        if exp is not None and hasattr(user, 'midwife_profile'):
+            try:
+                user.midwife_profile.experience_years = int(exp)
+                user.midwife_profile.save(update_fields=['experience_years'])
+            except (ValueError, TypeError):
+                pass
         return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(summary="Replace current user", tags=["Users"])
