@@ -165,17 +165,39 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def check_consultation_membership(self, user, consultation_id):
         try:
-            consultation = Consultation.objects.get(id=consultation_id)
-            if user == consultation.user or (hasattr(user, 'midwife_profile') and user.midwife_profile == consultation.midwife):
+            consultation = Consultation.objects.filter(id=consultation_id).first()
+            if not consultation:
+                appointment = Appointment.objects.filter(id=consultation_id).first()
+                if appointment:
+                    consultation = getattr(appointment, 'consultation', None)
+                    if not consultation:
+                        consultation, _ = Consultation.objects.get_or_create(
+                            appointment=appointment,
+                            defaults={
+                                'user': appointment.user,
+                                'midwife': appointment.midwife,
+                                'consultation_type': appointment.appointment_type,
+                                'status': Consultation.ConsultationStatus.SCHEDULED,
+                            }
+                        )
+            if consultation and (user == consultation.user or (hasattr(user, 'midwife_profile') and user.midwife_profile == consultation.midwife)):
                 return True
-        except Consultation.DoesNotExist:
+        except Exception:
             pass
         return False
 
     @database_sync_to_async
     def update_call_status(self, consultation_id, call_type, status_val):
         try:
-            consultation = Consultation.objects.get(id=consultation_id)
+            consultation = Consultation.objects.filter(id=consultation_id).first()
+            if not consultation:
+                appointment = Appointment.objects.filter(id=consultation_id).first()
+                if appointment and hasattr(appointment, 'consultation'):
+                    consultation = appointment.consultation
+
+            if not consultation:
+                return
+
             now = timezone.now()
 
             if call_type == 'VOICE' and hasattr(consultation, 'voice_session'):
@@ -196,5 +218,5 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                     session.ended_at = now
                 session.save()
 
-        except Consultation.DoesNotExist:
+        except Exception:
             pass

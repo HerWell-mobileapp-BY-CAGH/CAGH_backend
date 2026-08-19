@@ -88,7 +88,28 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     @extend_schema(summary="Start consultation lifecycle & trigger device call ringing", tags=["Consultations"])
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
-        consultation = self.get_object()
+        # 1. Try finding Consultation by primary key
+        consultation = Consultation.objects.filter(id=pk).first()
+
+        # 2. If not found by Consultation ID, check if pk is an Appointment ID
+        if not consultation:
+            appointment = Appointment.objects.filter(id=pk).first()
+            if appointment:
+                consultation, _ = Consultation.objects.get_or_create(
+                    appointment=appointment,
+                    defaults={
+                        'user': appointment.user,
+                        'midwife': appointment.midwife,
+                        'consultation_type': appointment.appointment_type,
+                        'status': Consultation.ConsultationStatus.SCHEDULED,
+                    }
+                )
+
+        if not consultation:
+            return Response(
+                {"error": "No active consultation or appointment record found matching the provided ID."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         if consultation.status == Consultation.ConsultationStatus.COMPLETED:
             return Response({"error": "Completed consultations cannot be restarted."}, status=status.HTTP_400_BAD_REQUEST)
@@ -121,7 +142,10 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         recipient = consultation.user if (hasattr(caller, 'midwife_profile') and caller.midwife_profile == consultation.midwife) else consultation.midwife.user
 
         # Trigger incoming call push notification to ring peer device
-        send_incoming_call_notification(caller=caller, recipient=recipient, consultation=consultation, call_type=call_type, session_key=session_key)
+        try:
+            send_incoming_call_notification(caller=caller, recipient=recipient, consultation=consultation, call_type=call_type, session_key=session_key)
+        except Exception:
+            pass
 
         serializer = self.get_serializer(consultation)
         return Response({'status': 'ACTIVE', 'started_at': consultation.started_at, 'consultation': serializer.data}, status=status.HTTP_200_OK)

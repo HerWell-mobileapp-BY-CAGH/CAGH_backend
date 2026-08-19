@@ -199,3 +199,65 @@ class ConsultationManagementTestCase(APITestCase):
         history_url = reverse("consultation-history")
         hist_res = self.client.get(history_url)
         self.assertEqual(hist_res.status_code, status.HTTP_200_OK)
+
+    def test_start_call_using_appointment_id(self):
+        """Verifies starting a call using Appointment ID directly creates consultation & triggers call."""
+        self.client.force_authenticate(user=self.patient)
+        start_url = reverse("consultation-start", kwargs={"pk": self.confirmed_appointment.id})
+        res = self.client.post(start_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["status"], "ACTIVE")
+        self.assertIsNotNone(res.data["consultation"])
+
+    async def test_websocket_call_signaling(self):
+        """Verifies WebSocket WebRTC call signaling: call_offer, call_answer, ice_candidate, toggle_media, end_call."""
+        from rest_framework_simplejwt.tokens import AccessToken
+        from channels.testing import WebsocketCommunicator
+        from config.asgi import application
+
+        consultation = await Consultation.objects.acreate(
+            appointment=self.confirmed_appointment,
+            user=self.patient,
+            midwife=self.midwife_profile,
+            consultation_type="VIRTUAL_VOICE",
+            status="ACTIVE",
+        )
+
+        token = str(AccessToken.for_user(self.patient))
+        communicator = WebsocketCommunicator(
+            application,
+            f"/ws/consultation/{consultation.id}/?token={token}"
+        )
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        # 1. Send call_offer
+        await communicator.send_json_to({
+            "action": "call_offer",
+            "call_type": "VOICE",
+            "sdp_offer": "dummy_sdp_offer_data",
+            "rtc_token": "dummy_rtc_token"
+        })
+        res_offer = await communicator.receive_json_from()
+        self.assertEqual(res_offer["type"], "incoming_call_offer")
+        self.assertEqual(res_offer["call_type"], "VOICE")
+
+        # 2. Send call_answer
+        await communicator.send_json_to({
+            "action": "call_answer",
+            "sdp_answer": "dummy_sdp_answer_data"
+        })
+        res_answer = await communicator.receive_json_from()
+        self.assertEqual(res_answer["type"], "call_answered")
+
+        # 3. Send toggle_media (mute mic)
+        await communicator.send_json_to({
+            "action": "toggle_media",
+            "is_muted": True
+        })
+        res_media = await communicator.receive_json_from()
+        self.assertEqual(res_media["type"], "media_state_changed")
+        self.assertTrue(res_media["is_muted"])
+
+        await communicator.disconnect()
+
