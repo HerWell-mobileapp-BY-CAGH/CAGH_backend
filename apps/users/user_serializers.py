@@ -61,8 +61,18 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_midwife_profile(self, obj):
         if hasattr(obj, 'midwife_profile'):
-            from apps.midwives.serializers import MidwifeProfileSerializer
-            return MidwifeProfileSerializer(obj.midwife_profile, context=self.context).data
+            mw = obj.midwife_profile
+            return {
+                "id": str(mw.id),
+                "license_number": mw.license_number,
+                "verification_status": mw.verification_status,
+                "specialty": mw.specialty,
+                "consultation_fee": str(mw.consultation_fee),
+                "experience_years": mw.experience_years,
+                "is_accepting_bookings": mw.is_accepting_bookings,
+                "hospital_id": str(mw.hospital.id) if mw.hospital else None,
+                "hospital_name": mw.hospital.name if mw.hospital else None,
+            }
         return None
 
 
