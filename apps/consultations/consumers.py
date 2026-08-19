@@ -12,13 +12,14 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     """
 
     async def connect(self):
-        self.consultation_id = self.scope['url_route']['kwargs']['consultation_id']
-        self.group_name = f'consultation_call_{self.consultation_id}'
-
+        raw_id = self.scope['url_route']['kwargs']['consultation_id']
         user = self.scope.get('user')
         if not user or user.is_anonymous:
             await self.close(code=4001)
             return
+
+        self.consultation_id = await self.get_canonical_consultation_id(raw_id)
+        self.group_name = f'consultation_call_{self.consultation_id}'
 
         is_member = await self.check_consultation_membership(user, self.consultation_id)
         if not is_member:
@@ -161,6 +162,31 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             'sender_id': event['sender_id'],
             'ended_at': event['ended_at'],
         }))
+
+    @database_sync_to_async
+    def get_canonical_consultation_id(self, raw_id):
+        try:
+            consultation = Consultation.objects.filter(id=raw_id).first()
+            if consultation:
+                return str(consultation.id)
+
+            appointment = Appointment.objects.filter(id=raw_id).first()
+            if appointment:
+                consultation = getattr(appointment, 'consultation', None)
+                if not consultation:
+                    consultation, _ = Consultation.objects.get_or_create(
+                        appointment=appointment,
+                        defaults={
+                            'user': appointment.user,
+                            'midwife': appointment.midwife,
+                            'consultation_type': appointment.appointment_type,
+                            'status': Consultation.ConsultationStatus.SCHEDULED,
+                        }
+                    )
+                return str(consultation.id)
+        except Exception:
+            pass
+        return str(raw_id)
 
     @database_sync_to_async
     def check_consultation_membership(self, user, consultation_id):
