@@ -77,10 +77,14 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             or self.initial_data.get("expected_role")
         )
         if not requested_role_raw and req:
+            req_data = getattr(req, "data", {}) or {}
             requested_role_raw = (
-                req.query_params.get("role")
+                req_data.get("role")
+                or req_data.get("expected_role")
+                or req.query_params.get("role")
                 or req.query_params.get("expected_role")
                 or req.headers.get("X-Role")
+                or req.headers.get("x-role")
             )
 
         if requested_role_raw:
