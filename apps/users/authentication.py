@@ -87,8 +87,14 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 or req.headers.get("x-role")
             )
 
+        from apps.users.models import User
+
+        # Auto-heal: If user has a MidwifeProfile attached, ensure DB role is MIDWIFE
+        if hasattr(user, 'midwife_profile') and user.role != User.Role.MIDWIFE:
+            user.role = User.Role.MIDWIFE
+            user.save(update_fields=['role'])
+
         if requested_role_raw:
-            from apps.users.models import User
             normalized_requested = User.Role.normalize(requested_role_raw)
             normalized_user_role = User.Role.normalize(user.role)
 

@@ -204,8 +204,11 @@ class BlockedDateViewSet(viewsets.ModelViewSet):
         return BlockedDate.objects.none()
 
     def perform_create(self, serializer):
-        if hasattr(self.request.user, 'midwife_profile'):
-            serializer.save(midwife=self.request.user.midwife_profile)
+        user = self.request.user
+        if hasattr(user, 'midwife_profile'):
+            if user.midwife_profile.verification_status != MidwifeProfile.VerificationStatus.APPROVED and not user.is_staff:
+                raise exceptions.PermissionDenied("Your midwife account is awaiting admin verification before you can manage blocked dates.")
+            serializer.save(midwife=user.midwife_profile)
         else:
             raise exceptions.PermissionDenied("Only registered midwives can manage blocked dates.")
 

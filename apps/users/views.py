@@ -322,6 +322,11 @@ class OTPLoginView(APIView):
             or request.query_params.get("expected_role")
             or request.headers.get("X-Role")
         )
+        # Auto-heal: If user has a MidwifeProfile attached, ensure DB role is MIDWIFE
+        if hasattr(user, 'midwife_profile') and user.role != User.Role.MIDWIFE:
+            user.role = User.Role.MIDWIFE
+            user.save(update_fields=['role'])
+
         if requested_role_raw:
             normalized_requested = User.Role.normalize(requested_role_raw)
             normalized_user_role = User.Role.normalize(user.role)

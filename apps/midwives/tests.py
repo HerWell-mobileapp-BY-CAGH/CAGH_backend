@@ -87,9 +87,18 @@ class MidwifeManagementTestCase(APITestCase):
         self.assertIn("today_schedule", response.data)
         self.assertIn("counts", response.data)
 
-    def test_midwife_blocked_dates(self):
+    def test_midwife_blocked_dates(self,):
+        # Unverified midwife attempt -> 403 Forbidden
+        self.midwife_profile.verification_status = "PENDING"
+        self.midwife_profile.save()
         self.client.force_authenticate(user=self.midwife_user)
         url = reverse("midwife-blocked-date-list")
+        create_res_pending = self.client.post(url, {"date": "2026-09-15", "reason": "Annual leave"}, format="json")
+        self.assertEqual(create_res_pending.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Verified midwife attempt -> 201 Created
+        self.midwife_profile.verification_status = "APPROVED"
+        self.midwife_profile.save()
         create_res = self.client.post(url, {"date": "2026-09-15", "reason": "Annual leave"}, format="json")
         self.assertEqual(create_res.status_code, status.HTTP_201_CREATED)
 

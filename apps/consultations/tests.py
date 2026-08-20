@@ -227,45 +227,59 @@ class ConsultationManagementTestCase(APITestCase):
             status="ACTIVE",
         )
 
-        token = str(AccessToken.for_user(self.patient))
-        communicator = WebsocketCommunicator(
-            application,
-            f"/ws/consultation/{consultation.id}/?token={token}"
-        )
-        connected, _ = await communicator.connect()
-        self.assertTrue(connected)
-        res_peer = await communicator.receive_json_from()
-        self.assertEqual(res_peer["type"], "peer_joined")
+        patient_token = str(AccessToken.for_user(self.patient))
+        midwife_token = str(AccessToken.for_user(self.midwife_user))
 
-        # 1. Send call_offer
-        await communicator.send_json_to({
+        patient_comm = WebsocketCommunicator(
+            application,
+            f"/ws/consultation/{consultation.id}/?token={patient_token}"
+        )
+        midwife_comm = WebsocketCommunicator(
+            application,
+            f"/ws/consultation/{consultation.id}/?token={midwife_token}"
+        )
+
+        connected_p, _ = await patient_comm.connect()
+        self.assertTrue(connected_p)
+
+        connected_m, _ = await midwife_comm.connect()
+        self.assertTrue(connected_m)
+
+        # Patient receives peer_joined event when Midwife connects
+        res_p_peer_joined = await patient_comm.receive_json_from()
+        self.assertEqual(res_p_peer_joined["type"], "peer_joined")
+        self.assertEqual(res_p_peer_joined["sender_id"], str(self.midwife_user.id))
+
+        # 1. Patient sends call_offer -> Midwife receives incoming_call_offer
+        await patient_comm.send_json_to({
             "action": "call_offer",
             "call_type": "VOICE",
             "sdp_offer": "dummy_sdp_offer_data",
             "rtc_token": "dummy_rtc_token"
         })
-        res_offer = await communicator.receive_json_from()
+        res_offer = await midwife_comm.receive_json_from()
         self.assertEqual(res_offer["type"], "incoming_call_offer")
         self.assertEqual(res_offer["call_type"], "VOICE")
 
-        # 2. Send call_answer
-        await communicator.send_json_to({
+        # 2. Midwife sends call_answer -> Patient receives call_answered
+        await midwife_comm.send_json_to({
             "action": "call_answer",
             "sdp_answer": "dummy_sdp_answer_data"
         })
-        res_answer = await communicator.receive_json_from()
+        res_answer = await patient_comm.receive_json_from()
         self.assertEqual(res_answer["type"], "call_answered")
 
-        # 3. Send toggle_media (mute mic)
-        await communicator.send_json_to({
+        # 3. Patient sends toggle_media -> Midwife receives media_state_changed
+        await patient_comm.send_json_to({
             "action": "toggle_media",
             "is_muted": True
         })
-        res_media = await communicator.receive_json_from()
+        res_media = await midwife_comm.receive_json_from()
         self.assertEqual(res_media["type"], "media_state_changed")
         self.assertTrue(res_media["is_muted"])
 
-        await communicator.disconnect()
+        await patient_comm.disconnect()
+        await midwife_comm.disconnect()
 
     async def test_user_calls_websocket_notification(self):
         from asgiref.sync import sync_to_async

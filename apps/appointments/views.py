@@ -54,8 +54,13 @@ class AvailabilityViewSet(viewsets.ModelViewSet):
         return Availability.objects.filter(is_active=True)
 
     def perform_create(self, serializer):
-        if hasattr(self.request.user, 'midwife_profile'):
-            serializer.save(midwife=self.request.user.midwife_profile)
+        user = self.request.user
+        if hasattr(user, 'midwife_profile'):
+            if user.midwife_profile.verification_status != MidwifeProfile.VerificationStatus.APPROVED and not user.is_staff:
+                raise exceptions.PermissionDenied("Your midwife account is awaiting admin verification before you can publish working hours.")
+            serializer.save(midwife=user.midwife_profile)
+        else:
+            raise exceptions.PermissionDenied("Only registered midwives can set working hours availability.")
 
 
 def _to_ethiopian_time(t):
@@ -247,6 +252,12 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
         appointment = self.get_object()
+        user = request.user
+        if not user.is_staff and getattr(user, 'role', '') != 'ADMIN':
+            is_patient = appointment.user == user
+            is_assigned_midwife = hasattr(user, 'midwife_profile') and appointment.midwife == user.midwife_profile
+            if not (is_patient or is_assigned_midwife):
+                return Response({'error': 'You do not have permission to cancel this appointment.'}, status=status.HTTP_403_FORBIDDEN)
 
         if appointment.status == Appointment.AppointmentStatus.CANCELLED:
             return Response({'message': 'Appointment is already cancelled.'}, status=status.HTTP_200_OK)
@@ -272,6 +283,13 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def reschedule(self, request, pk=None):
         appointment = self.get_object()
+        user = request.user
+        if not user.is_staff and getattr(user, 'role', '') != 'ADMIN':
+            is_patient = appointment.user == user
+            is_assigned_midwife = hasattr(user, 'midwife_profile') and appointment.midwife == user.midwife_profile
+            if not (is_patient or is_assigned_midwife):
+                return Response({'error': 'You do not have permission to reschedule this appointment.'}, status=status.HTTP_403_FORBIDDEN)
+
         new_date = request.data.get('scheduled_date')
         new_start = request.data.get('start_time')
         new_end = request.data.get('end_time')
@@ -311,6 +329,15 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def confirm(self, request, pk=None):
         appointment = self.get_object()
+        user = request.user
+        if not user.is_staff and getattr(user, 'role', '') != 'ADMIN':
+            if not hasattr(user, 'midwife_profile'):
+                return Response({'error': 'Only midwives can confirm appointments.'}, status=status.HTTP_403_FORBIDDEN)
+            if user.midwife_profile != appointment.midwife:
+                return Response({'error': 'You are not the assigned midwife for this appointment.'}, status=status.HTTP_403_FORBIDDEN)
+            if user.midwife_profile.verification_status != MidwifeProfile.VerificationStatus.APPROVED:
+                return Response({'error': 'Your midwife account is awaiting verification.'}, status=status.HTTP_403_FORBIDDEN)
+
         appointment.status = Appointment.AppointmentStatus.CONFIRMED
         appointment.save()
 
@@ -327,6 +354,15 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
         appointment = self.get_object()
+        user = request.user
+        if not user.is_staff and getattr(user, 'role', '') != 'ADMIN':
+            if not hasattr(user, 'midwife_profile'):
+                return Response({'error': 'Only midwives can complete appointments.'}, status=status.HTTP_403_FORBIDDEN)
+            if user.midwife_profile != appointment.midwife:
+                return Response({'error': 'You are not the assigned midwife for this appointment.'}, status=status.HTTP_403_FORBIDDEN)
+            if user.midwife_profile.verification_status != MidwifeProfile.VerificationStatus.APPROVED:
+                return Response({'error': 'Your midwife account is awaiting verification.'}, status=status.HTTP_403_FORBIDDEN)
+
         appointment.status = Appointment.AppointmentStatus.COMPLETED
         appointment.save()
 

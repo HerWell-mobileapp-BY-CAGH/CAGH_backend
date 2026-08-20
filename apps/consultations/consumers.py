@@ -161,8 +161,11 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-    # Event Handlers for Broadcasting to Peer
+    # Event Handlers for Broadcasting to Peer (Skips sending back to the sender)
     async def broadcast_call_offer(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
         await self.send(text_data=json.dumps({
             'type': 'incoming_call_offer',
             'action': 'incoming_call_offer',
@@ -175,6 +178,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         }))
 
     async def broadcast_call_answer(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
         await self.send(text_data=json.dumps({
             'type': 'call_answered',
             'action': 'call_answered',
@@ -183,6 +189,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         }))
 
     async def broadcast_ice_candidate(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
         await self.send(text_data=json.dumps({
             'type': 'ice_candidate',
             'action': 'ice_candidate',
@@ -191,6 +200,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         }))
 
     async def broadcast_media_toggle(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
         await self.send(text_data=json.dumps({
             'type': 'media_state_changed',
             'action': 'media_state_changed',
@@ -200,6 +212,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         }))
 
     async def broadcast_call_ended(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
         await self.send(text_data=json.dumps({
             'type': 'call_ended',
             'action': 'call_ended',
@@ -208,6 +223,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         }))
 
     async def broadcast_peer_joined(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
         await self.send(text_data=json.dumps({
             'type': 'peer_joined',
             'action': 'peer_joined',
