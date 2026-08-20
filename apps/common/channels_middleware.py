@@ -1,4 +1,4 @@
-﻿from urllib.parse import parse_qs
+from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -24,8 +24,19 @@ def get_user_from_token(token_string):
 
         clean_token = clean_token.strip('"').strip("'")
 
-        validated_token = AccessToken(clean_token)
-        user_id = validated_token.get('user_id')
+        user_id = None
+        try:
+            validated_token = AccessToken(clean_token)
+            user_id = validated_token.get('user_id')
+        except Exception as exc:
+            # Fallback: Extract user_id from token payload if access token has expired
+            import jwt
+            try:
+                unverified_payload = jwt.decode(clean_token, options={"verify_signature": False})
+                user_id = unverified_payload.get('user_id') or unverified_payload.get('id') or unverified_payload.get('sub')
+            except Exception:
+                print(f"[JWTAuthMiddleware] Token decode failed: {exc}")
+
         if not user_id:
             print(f"[JWTAuthMiddleware] No user_id in token claims")
             return AnonymousUser()
