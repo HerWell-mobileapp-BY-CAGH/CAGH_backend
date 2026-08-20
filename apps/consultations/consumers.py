@@ -59,6 +59,10 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         user = self.scope['user']
         sender_name = getattr(user, 'full_name', None) or getattr(user, 'username', None) or str(user)
 
+        if action_type == 'ping':
+            await self.send(text_data=json.dumps({'type': 'pong'}))
+            return
+
         # 1. Call Initiation (Ringing peer device)
         if action_type in ['call_offer', 'incoming_call_offer', 'offer']:
             call_type = data.get('call_type', 'VOICE')  # VOICE or VIDEO
@@ -353,6 +357,15 @@ class UserCallConsumer(AsyncWebsocketConsumer):
                 self.user_group,
                 self.channel_name
             )
+
+    async def receive(self, text_data):
+        try:
+            data = json.loads(text_data)
+            action = data.get('type') or data.get('action')
+            if action == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+        except Exception:
+            pass
 
     async def broadcast_incoming_call(self, event):
         await self.send(text_data=json.dumps(event['data']))
