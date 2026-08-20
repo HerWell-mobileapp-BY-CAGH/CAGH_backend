@@ -154,7 +154,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             pass
 
         channel_name = f"cagh_consultation_{consultation.id}"
-        ws_url = f"wss://cagh-backend-api.onrender.com/ws/consultation/{consultation.id}/"
+        request_host = request.get_host()
+        scheme = "wss" if request.is_secure() else "ws"
+        ws_url = f"{scheme}://{request_host}/ws/consultation/{consultation.id}/"
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_test_app_id')
 
         serializer = self.get_serializer(consultation)
