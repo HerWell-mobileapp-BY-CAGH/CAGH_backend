@@ -1,4 +1,4 @@
-﻿import json
+import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
@@ -44,10 +44,13 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, 'group_name'):
-            await self.channel_layer.group_discard(
-                self.group_name,
-                self.channel_name
-            )
+            try:
+                await self.channel_layer.group_discard(
+                    self.group_name,
+                    self.channel_name
+                )
+            except Exception:
+                pass
 
     async def receive(self, text_data):
         try:
@@ -353,10 +356,13 @@ class UserCallConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         if hasattr(self, 'user_group'):
-            await self.channel_layer.group_discard(
-                self.user_group,
-                self.channel_name
-            )
+            try:
+                await self.channel_layer.group_discard(
+                    self.user_group,
+                    self.channel_name
+                )
+            except Exception:
+                pass
 
     async def receive(self, text_data):
         try:
