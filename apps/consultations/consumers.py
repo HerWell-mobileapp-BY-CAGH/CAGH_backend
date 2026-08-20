@@ -1,4 +1,4 @@
-import json
+﻿import json
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
@@ -32,12 +32,13 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         )
         await self.accept()
 
+        sender_name = getattr(user, 'full_name', None) or getattr(user, 'username', None) or str(user)
         await self.channel_layer.group_send(
             self.group_name,
             {
                 'type': 'broadcast_peer_joined',
                 'sender_id': str(user.id),
-                'sender_name': user.username,
+                'sender_name': sender_name,
             }
         )
 
@@ -54,13 +55,14 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         except ValueError:
             return
 
-        action_type = data.get('action')
+        action_type = data.get('action') or data.get('type')
         user = self.scope['user']
+        sender_name = getattr(user, 'full_name', None) or getattr(user, 'username', None) or str(user)
 
         # 1. Call Initiation (Ringing peer device)
-        if action_type == 'call_offer':
+        if action_type in ['call_offer', 'incoming_call_offer', 'offer']:
             call_type = data.get('call_type', 'VOICE')  # VOICE or VIDEO
-            sdp_offer = data.get('sdp_offer')
+            sdp_offer = data.get('sdp_offer') or data.get('sdp') or data.get('offer')
             rtc_token = data.get('rtc_token')
 
             await self.update_call_status(self.consultation_id, call_type, 'ONGOING')
@@ -70,10 +72,11 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                 {
                     'type': 'broadcast_call_offer',
                     'sender_id': str(user.id),
-                    'sender_name': user.username,
+                    'sender_name': sender_name,
                     'call_type': call_type,
                     'sdp_offer': sdp_offer,
                     'rtc_token': rtc_token,
+                    'consultation_id': self.consultation_id,
                 }
             )
 
@@ -85,9 +88,10 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                         'type': 'broadcast_incoming_call',
                         'data': {
                             'type': 'incoming_call_offer',
+                            'action': 'incoming_call_offer',
                             'consultation_id': self.consultation_id,
                             'sender_id': str(user.id),
-                            'sender_name': user.username,
+                            'sender_name': sender_name,
                             'call_type': call_type,
                             'sdp_offer': sdp_offer,
                             'rtc_token': rtc_token,
@@ -96,8 +100,8 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                 )
 
         # 2. Call Answer (Accepting incoming call)
-        elif action_type == 'call_answer':
-            sdp_answer = data.get('sdp_answer')
+        elif action_type in ['call_answer', 'call_answered', 'incoming_call_answer', 'answer']:
+            sdp_answer = data.get('sdp_answer') or data.get('sdp') or data.get('answer')
 
             await self.channel_layer.group_send(
                 self.group_name,
@@ -109,7 +113,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             )
 
         # 3. ICE Candidate Packet Exchange
-        elif action_type == 'ice_candidate':
+        elif action_type in ['ice_candidate', 'candidate']:
             candidate = data.get('candidate')
 
             await self.channel_layer.group_send(
@@ -137,7 +141,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             )
 
         # 5. End Call
-        elif action_type == 'end_call':
+        elif action_type in ['end_call', 'call_ended']:
             call_type = data.get('call_type', 'VOICE')
             await self.update_call_status(self.consultation_id, call_type, 'ENDED')
 
@@ -154,16 +158,19 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     async def broadcast_call_offer(self, event):
         await self.send(text_data=json.dumps({
             'type': 'incoming_call_offer',
+            'action': 'incoming_call_offer',
             'sender_id': event['sender_id'],
             'sender_name': event['sender_name'],
             'call_type': event['call_type'],
             'sdp_offer': event['sdp_offer'],
-            'rtc_token': event['rtc_token'],
+            'rtc_token': event.get('rtc_token'),
+            'consultation_id': event.get('consultation_id', self.consultation_id),
         }))
 
     async def broadcast_call_answer(self, event):
         await self.send(text_data=json.dumps({
             'type': 'call_answered',
+            'action': 'call_answered',
             'sender_id': event['sender_id'],
             'sdp_answer': event['sdp_answer'],
         }))
@@ -171,6 +178,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     async def broadcast_ice_candidate(self, event):
         await self.send(text_data=json.dumps({
             'type': 'ice_candidate',
+            'action': 'ice_candidate',
             'sender_id': event['sender_id'],
             'candidate': event['candidate'],
         }))
@@ -178,6 +186,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     async def broadcast_media_toggle(self, event):
         await self.send(text_data=json.dumps({
             'type': 'media_state_changed',
+            'action': 'media_state_changed',
             'sender_id': event['sender_id'],
             'is_muted': event.get('is_muted'),
             'video_enabled': event.get('video_enabled'),
@@ -186,6 +195,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     async def broadcast_call_ended(self, event):
         await self.send(text_data=json.dumps({
             'type': 'call_ended',
+            'action': 'call_ended',
             'sender_id': event['sender_id'],
             'ended_at': event['ended_at'],
         }))
@@ -193,6 +203,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     async def broadcast_peer_joined(self, event):
         await self.send(text_data=json.dumps({
             'type': 'peer_joined',
+            'action': 'peer_joined',
             'sender_id': event['sender_id'],
             'sender_name': event['sender_name'],
         }))
@@ -243,7 +254,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             if not consultation:
                 return True
 
-            if user == consultation.user:
+            if str(user.id) == str(consultation.user_id):
                 return True
             if getattr(user, 'role', '') == 'MIDWIFE' or hasattr(user, 'midwife_profile'):
                 if not consultation.midwife or consultation.midwife == getattr(user, 'midwife_profile', None):
@@ -293,21 +304,27 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
     def get_recipient_user_id(self, consultation_id, sender_user):
         try:
             from apps.appointments.models import Appointment
+            sender_id = str(getattr(sender_user, 'id', ''))
+
             consultation = Consultation.objects.filter(id=consultation_id).first()
             if not consultation:
                 appointment = Appointment.objects.filter(id=consultation_id).first()
                 if appointment:
-                    if sender_user == appointment.user and appointment.midwife and hasattr(appointment.midwife, 'user'):
-                        return str(appointment.midwife.user.id)
-                    elif appointment.user:
-                        return str(appointment.user.id)
+                    patient_id = str(appointment.user.id) if appointment.user else ''
+                    midwife_user_id = str(appointment.midwife.user.id) if (appointment.midwife and hasattr(appointment.midwife, 'user') and appointment.midwife.user) else ''
+                    if sender_id == patient_id:
+                        return midwife_user_id
+                    else:
+                        return patient_id
             elif consultation:
-                if sender_user == consultation.user and consultation.midwife and hasattr(consultation.midwife, 'user'):
-                    return str(consultation.midwife.user.id)
-                elif consultation.user:
-                    return str(consultation.user.id)
-        except Exception:
-            pass
+                patient_id = str(consultation.user.id) if consultation.user else ''
+                midwife_user_id = str(consultation.midwife.user.id) if (consultation.midwife and hasattr(consultation.midwife, 'user') and consultation.midwife.user) else ''
+                if sender_id == patient_id:
+                    return midwife_user_id
+                else:
+                    return patient_id
+        except Exception as e:
+            print(f"Error in get_recipient_user_id: {e}")
         return None
 
 
@@ -339,4 +356,3 @@ class UserCallConsumer(AsyncWebsocketConsumer):
 
     async def broadcast_incoming_call(self, event):
         await self.send(text_data=json.dumps(event['data']))
-
