@@ -313,15 +313,22 @@ class OTPLoginView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        requested_role = (
+        requested_role_raw = (
             serializer.validated_data.get("role")
             or serializer.validated_data.get("expected_role")
+            or request.data.get("role")
+            or request.data.get("expected_role")
+            or request.query_params.get("role")
+            or request.query_params.get("expected_role")
+            or request.headers.get("X-Role")
         )
-        if requested_role:
-            requested_role = str(requested_role).upper().strip()
-            if user.role != requested_role and not user.is_staff:
+        if requested_role_raw:
+            normalized_requested = User.Role.normalize(requested_role_raw)
+            normalized_user_role = User.Role.normalize(user.role)
+
+            if normalized_user_role != normalized_requested and not user.is_staff:
                 return Response(
-                    {"error": f"Access denied: This account is registered as a {user.role} and cannot log in to the {requested_role} app."},
+                    {"error": f"Access denied: This account is registered as a {user.role} and cannot log in as a {normalized_requested}."},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 

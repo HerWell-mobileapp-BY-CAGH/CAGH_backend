@@ -10,6 +10,19 @@ class User(AbstractUser):
         MIDWIFE = 'MIDWIFE', _('Midwife')
         ADMIN = 'ADMIN', _('Admin')
 
+        @classmethod
+        def normalize(cls, role_val):
+            if not role_val:
+                return None
+            r = str(role_val).upper().strip()
+            if r in ('USER', 'PATIENT', 'PATIENTS', 'CLIENT'):
+                return cls.PATIENT
+            if r in ('MIDWIFE', 'MIDWIVES', 'NURSE', 'DOCTOR'):
+                return cls.MIDWIFE
+            if r in ('ADMIN', 'SUPERADMIN', 'STAFF'):
+                return cls.ADMIN
+            return r
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=150, unique=True, null=True, blank=True)
     email = models.EmailField(_('email address'), unique=True, null=True, blank=True)

@@ -159,6 +159,14 @@ class AuthenticationTestCase(APITestCase):
         )
         self.assertEqual(res_success.status_code, status.HTTP_200_OK)
 
+        # Log in to Patient side using role alias "USER" -> Success
+        res_alias_success = self.client.post(
+            url,
+            {"email": "patient_role@example.com", "password": "Password123!", "role": "USER"},
+            format="json",
+        )
+        self.assertEqual(res_alias_success.status_code, status.HTTP_200_OK)
+
     def test_midwife_login_on_user_side_fails(self):
         midwife = User.objects.create_user(
             username="midwife_role_user",
@@ -168,7 +176,7 @@ class AuthenticationTestCase(APITestCase):
         )
         url = reverse("auth-login")
 
-        # Attempt to log in to Patient side with Midwife credentials -> Should be denied
+        # Attempt to log in to Patient side with Midwife credentials (role="PATIENT") -> Should be denied
         res_denied = self.client.post(
             url,
             {"email": "midwife_role@example.com", "password": "Password123!", "role": "PATIENT"},
@@ -176,6 +184,15 @@ class AuthenticationTestCase(APITestCase):
         )
         self.assertEqual(res_denied.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("Access denied", str(res_denied.data))
+
+        # Attempt to log in to Patient side with Midwife credentials (role="USER") -> Should be denied
+        res_denied_user_alias = self.client.post(
+            url,
+            {"email": "midwife_role@example.com", "password": "Password123!", "role": "USER"},
+            format="json",
+        )
+        self.assertEqual(res_denied_user_alias.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("Access denied", str(res_denied_user_alias.data))
 
         # Log in to Midwife side with Midwife credentials -> Success
         res_success = self.client.post(

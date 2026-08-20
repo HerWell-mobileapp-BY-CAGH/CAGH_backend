@@ -69,18 +69,28 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 code="no_active_account",
             )
 
-        requested_role = (
+        req = self.context.get("request")
+        requested_role_raw = (
             attrs.get("role")
             or attrs.get("expected_role")
             or self.initial_data.get("role")
             or self.initial_data.get("expected_role")
         )
+        if not requested_role_raw and req:
+            requested_role_raw = (
+                req.query_params.get("role")
+                or req.query_params.get("expected_role")
+                or req.headers.get("X-Role")
+            )
 
-        if requested_role:
-            requested_role = str(requested_role).upper().strip()
-            if user.role != requested_role and not user.is_staff:
+        if requested_role_raw:
+            from apps.users.models import User
+            normalized_requested = User.Role.normalize(requested_role_raw)
+            normalized_user_role = User.Role.normalize(user.role)
+
+            if normalized_user_role != normalized_requested and not user.is_staff:
                 raise AuthenticationFailed(
-                    f"Access denied: This account is registered as a {user.role} and cannot log in to the {requested_role} app.",
+                    f"Access denied: This account is registered as a {user.role} and cannot log in as a {normalized_requested}.",
                     code="role_mismatch",
                 )
 
