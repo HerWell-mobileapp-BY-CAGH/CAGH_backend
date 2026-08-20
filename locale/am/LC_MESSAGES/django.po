@@ -16,7 +16,7 @@ msgid "Patient"
 msgstr "ታካሚ"
 
 msgid "Midwife"
-msgstr "አላዋቂ / መላዋቂ"
+msgstr "አዋላጅ ነርስ"
 
 msgid "Admin"
 msgstr "አስተዳዳሪ"
@@ -46,10 +46,10 @@ msgid "Under Review"
 msgstr "በግምገማ ላይ"
 
 msgid "Approved"
-msgstr "ተፀድቋል"
+msgstr "ፀድቋል"
 
 msgid "Rejected"
-msgstr "ተሳይዟል / ተከልክሏል"
+msgstr "ተሰርዟል / ተከልክሏል"
 
 msgid "Suspended"
 msgstr "ታግዷል"

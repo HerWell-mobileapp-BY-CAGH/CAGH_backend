@@ -31,6 +31,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         self.fields["email"] = serializers.CharField(required=False, write_only=True)
         self.fields["phone_number"] = serializers.CharField(required=False, write_only=True)
         self.fields["login"] = serializers.CharField(required=False, write_only=True)
+        self.fields["role"] = serializers.CharField(required=False, write_only=True)
+        self.fields["expected_role"] = serializers.CharField(required=False, write_only=True)
 
     @classmethod
     def get_token(cls, user):
@@ -66,6 +68,21 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 "No active account found with the given credentials",
                 code="no_active_account",
             )
+
+        requested_role = (
+            attrs.get("role")
+            or attrs.get("expected_role")
+            or self.initial_data.get("role")
+            or self.initial_data.get("expected_role")
+        )
+
+        if requested_role:
+            requested_role = str(requested_role).upper().strip()
+            if user.role != requested_role and not user.is_staff:
+                raise AuthenticationFailed(
+                    f"Access denied: This account is registered as a {user.role} and cannot log in to the {requested_role} app.",
+                    code="role_mismatch",
+                )
 
         self.user = user
         refresh = self.get_token(self.user)

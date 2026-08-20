@@ -259,6 +259,8 @@ class VerifyOTPSerializer(serializers.Serializer):
 class OTPLoginSerializer(serializers.Serializer):
     phone_number_or_email = serializers.CharField(required=True, help_text="Mobile phone number or email address.")
     otp_code = serializers.CharField(max_length=6, required=True, help_text="Verified 6-digit OTP code.")
+    role = serializers.CharField(required=False, write_only=True, help_text="Optional. Expected role for authentication (PATIENT or MIDWIFE).")
+    expected_role = serializers.CharField(required=False, write_only=True, help_text="Optional. Alias for role.")
 
 
 # ---------------------------------------------------------------------------

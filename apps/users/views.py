@@ -313,6 +313,18 @@ class OTPLoginView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        requested_role = (
+            serializer.validated_data.get("role")
+            or serializer.validated_data.get("expected_role")
+        )
+        if requested_role:
+            requested_role = str(requested_role).upper().strip()
+            if user.role != requested_role and not user.is_staff:
+                return Response(
+                    {"error": f"Access denied: This account is registered as a {user.role} and cannot log in to the {requested_role} app."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
         otp.is_verified = True
         otp.save()
 

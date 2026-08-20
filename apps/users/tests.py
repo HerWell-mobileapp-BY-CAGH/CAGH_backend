@@ -133,6 +133,84 @@ class AuthenticationTestCase(APITestCase):
         login_res = self.client.post(login_url, {"phone_number": "+233201112233", "password": "NewSecurePassword123!"}, format="json")
         self.assertEqual(login_res.status_code, status.HTTP_200_OK)
 
+    def test_role_mismatch_login_fails(self):
+        patient = User.objects.create_user(
+            username="patient_role_user",
+            email="patient_role@example.com",
+            password="Password123!",
+            role=User.Role.PATIENT,
+        )
+        url = reverse("auth-login")
+
+        # Attempt to log in to Midwife side with Patient credentials -> Should be denied
+        res_denied = self.client.post(
+            url,
+            {"email": "patient_role@example.com", "password": "Password123!", "role": "MIDWIFE"},
+            format="json",
+        )
+        self.assertEqual(res_denied.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("Access denied", str(res_denied.data))
+
+        # Log in to Patient side with Patient credentials -> Success
+        res_success = self.client.post(
+            url,
+            {"email": "patient_role@example.com", "password": "Password123!", "role": "PATIENT"},
+            format="json",
+        )
+        self.assertEqual(res_success.status_code, status.HTTP_200_OK)
+
+    def test_midwife_login_on_user_side_fails(self):
+        midwife = User.objects.create_user(
+            username="midwife_role_user",
+            email="midwife_role@example.com",
+            password="Password123!",
+            role=User.Role.MIDWIFE,
+        )
+        url = reverse("auth-login")
+
+        # Attempt to log in to Patient side with Midwife credentials -> Should be denied
+        res_denied = self.client.post(
+            url,
+            {"email": "midwife_role@example.com", "password": "Password123!", "role": "PATIENT"},
+            format="json",
+        )
+        self.assertEqual(res_denied.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("Access denied", str(res_denied.data))
+
+        # Log in to Midwife side with Midwife credentials -> Success
+        res_success = self.client.post(
+            url,
+            {"email": "midwife_role@example.com", "password": "Password123!", "role": "MIDWIFE"},
+            format="json",
+        )
+        self.assertEqual(res_success.status_code, status.HTTP_200_OK)
+
+    def test_otp_login_role_mismatch_fails(self):
+        midwife = User.objects.create_user(
+            username="midwife_otp_user",
+            phone_number="+251911998877",
+            role=User.Role.MIDWIFE,
+        )
+        from django.utils import timezone
+        from datetime import timedelta
+        otp = OTPVerification.objects.create(
+            phone_number_or_email="+251911998877",
+            otp_code="123456",
+            purpose=OTPVerification.Purpose.LOGIN,
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+
+        url = reverse("auth-login-otp")
+
+        # Attempt OTP login to Patient side with Midwife credentials -> Should be denied
+        res_denied = self.client.post(
+            url,
+            {"phone_number_or_email": "+251911998877", "otp_code": "123456", "role": "PATIENT"},
+            format="json",
+        )
+        self.assertEqual(res_denied.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertIn("Access denied", res_denied.data.get("error", ""))
+
 
 class UserManagementTestCase(APITestCase):
 
