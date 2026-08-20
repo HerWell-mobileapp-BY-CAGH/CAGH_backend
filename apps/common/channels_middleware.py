@@ -1,4 +1,4 @@
-from urllib.parse import parse_qs
+﻿from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
@@ -14,13 +14,27 @@ def get_user_from_token(token_string):
     Decodes SimpleJWT access token and returns the corresponding User instance,
     or AnonymousUser if token is invalid or user does not exist.
     """
+    if not token_string:
+        return AnonymousUser()
+
     try:
-        validated_token = AccessToken(token_string)
+        clean_token = token_string.strip()
+        if clean_token.startswith('Bearer ') or clean_token.startswith('bearer '):
+            clean_token = clean_token.split(' ', 1)[1].strip()
+
+        clean_token = clean_token.strip('"').strip("'")
+
+        validated_token = AccessToken(clean_token)
         user_id = validated_token.get('user_id')
         if not user_id:
+            print(f"[JWTAuthMiddleware] No user_id in token claims")
             return AnonymousUser()
-        return User.objects.get(id=user_id)
-    except (InvalidToken, TokenError, User.DoesNotExist):
+
+        user = User.objects.get(id=user_id)
+        print(f"[JWTAuthMiddleware] AUTH SUCCESS for user: {user.username} ({user.id})")
+        return user
+    except Exception as e:
+        print(f"[JWTAuthMiddleware] AUTH ERROR: {e} (token_length={len(token_string)})")
         return AnonymousUser()
 
 
