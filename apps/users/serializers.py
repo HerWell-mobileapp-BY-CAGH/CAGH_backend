@@ -103,11 +103,22 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         }
 
     def validate_role(self, value):
-        if value:
-            normalized = User.Role.normalize(value)
-            if normalized not in (User.Role.PATIENT, User.Role.MIDWIFE, User.Role.ADMIN):
-                raise serializers.ValidationError(f"Invalid role '{value}'. Must be PATIENT or MIDWIFE.")
-            return normalized
+        initial = getattr(self, "initial_data", {}) or {}
+        raw_val = (
+            value
+            or initial.get("role")
+            or initial.get("expected_role")
+            or initial.get("user_type")
+            or initial.get("account_type")
+            or initial.get("type")
+        )
+        if initial.get("is_midwife") is True or str(initial.get("is_midwife")).lower() == "true":
+            raw_val = "MIDWIFE"
+
+        if raw_val:
+            normalized = User.Role.normalize(raw_val)
+            if normalized in (User.Role.PATIENT, User.Role.MIDWIFE, User.Role.ADMIN):
+                return normalized
         return User.Role.PATIENT
 
     def validate_email(self, value):

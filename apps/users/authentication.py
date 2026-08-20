@@ -94,15 +94,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             user.role = User.Role.MIDWIFE
             user.save(update_fields=['role'])
 
-        if requested_role_raw:
-            normalized_requested = User.Role.normalize(requested_role_raw)
-            normalized_user_role = User.Role.normalize(user.role)
+        # Determine target requested role (if omitted by frontend login, default to PATIENT access)
+        target_requested_role = requested_role_raw or "PATIENT"
 
-            if normalized_user_role != normalized_requested and not user.is_staff:
-                raise AuthenticationFailed(
-                    f"Access denied: This account is registered as a {user.role} and cannot log in as a {normalized_requested}.",
-                    code="role_mismatch",
-                )
+        normalized_requested = User.Role.normalize(target_requested_role)
+        normalized_user_role = User.Role.normalize(user.role)
+
+        if normalized_user_role != normalized_requested and not user.is_staff:
+            raise AuthenticationFailed(
+                f"Access denied: This account is registered as a {user.role} and cannot log in as a {normalized_requested}.",
+                code="role_mismatch",
+            )
 
         self.user = user
         refresh = self.get_token(self.user)
