@@ -368,4 +368,9 @@ if not DEBUG:
 # Google Maps API Key (Optional — used for dynamic Places API facility search)
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
 
+# Agora RTC Configuration
+AGORA_APP_ID = os.environ.get('AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
+AGORA_APP_CERTIFICATE = os.environ.get('AGORA_APP_CERTIFICATE', '')
+
+
 

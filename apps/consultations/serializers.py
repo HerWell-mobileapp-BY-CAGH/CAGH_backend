@@ -13,54 +13,29 @@ class ConsultationNoteSerializer(serializers.ModelSerializer):
 
 
 class VoiceSessionSerializer(serializers.ModelSerializer):
-    rtc_channel_name = serializers.SerializerMethodField()
-    rtc_token = serializers.SerializerMethodField()
-    ws_signaling_url = serializers.SerializerMethodField()
+    caller_detail = UserSerializer(source='caller', read_only=True)
+    agora_channel_name = serializers.SerializerMethodField()
 
     class Meta:
         model = VoiceSession
         fields = '__all__'
-        read_only_fields = ('id', 'consultation')
+        read_only_fields = ('id', 'consultation', 'caller')
 
-    def get_rtc_channel_name(self, obj):
-        return f"cagh_voice_{obj.session_key}"
-
-    def get_rtc_token(self, obj):
-        # Generates deterministic WebRTC / Agora RTC connection token for session key
-        return f"RTC_TOKEN_{obj.session_key}"
-
-    def get_ws_signaling_url(self, obj):
-        request = self.context.get('request')
-        if request:
-            host = request.get_host()
-            scheme = 'wss' if request.is_secure() else 'ws'
-            return f"{scheme}://{host}/ws/consultation/{obj.consultation_id}/"
-        return f"ws://localhost:8000/ws/consultation/{obj.consultation_id}/"
+    def get_agora_channel_name(self, obj):
+        return obj.agora_channel_name or f"cagh_voice_{obj.session_key}"
 
 
 class VideoSessionSerializer(serializers.ModelSerializer):
-    rtc_channel_name = serializers.SerializerMethodField()
-    rtc_token = serializers.SerializerMethodField()
-    ws_signaling_url = serializers.SerializerMethodField()
+    agora_channel_name = serializers.SerializerMethodField()
 
     class Meta:
         model = VideoSession
         fields = '__all__'
         read_only_fields = ('id', 'consultation')
 
-    def get_rtc_channel_name(self, obj):
+    def get_agora_channel_name(self, obj):
         return f"cagh_video_{obj.session_key}"
 
-    def get_rtc_token(self, obj):
-        return f"RTC_TOKEN_{obj.session_key}"
-
-    def get_ws_signaling_url(self, obj):
-        request = self.context.get('request')
-        if request:
-            host = request.get_host()
-            scheme = 'wss' if request.is_secure() else 'ws'
-            return f"{scheme}://{host}/ws/consultation/{obj.consultation_id}/"
-        return f"ws://localhost:8000/ws/consultation/{obj.consultation_id}/"
 
 
 

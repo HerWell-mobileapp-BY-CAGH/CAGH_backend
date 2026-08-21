@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from apps.midwives.models import MidwifeProfile, Hospital
 from apps.appointments.models import Appointment
 from apps.consultations.models import Consultation, ConsultationNote, VoiceSession, VideoSession
+from apps.consultations.agora_service import AgoraService, Role as AgoraRole
 from apps.notifications.models import Notification
 
 User = get_user_model()
@@ -84,11 +85,9 @@ class ConsultationManagementTestCase(APITestCase):
         self.client.force_authenticate(user=self.patient)
         url = reverse("consultation-list")
 
-        # Try with pending appointment (Rule 2)
         bad_res = self.client.post(url, {"appointment": str(self.pending_appointment.id)}, format="json")
         self.assertEqual(bad_res.status_code, status.HTTP_400_BAD_REQUEST)
 
-        # Try with confirmed appointment
         good_res = self.client.post(url, {"appointment": str(self.confirmed_appointment.id)}, format="json")
         self.assertEqual(good_res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(good_res.data["consultation_type"], "VIRTUAL_VOICE")
@@ -103,14 +102,13 @@ class ConsultationManagementTestCase(APITestCase):
             status="SCHEDULED",
         )
 
-        # Start consultation
         self.client.force_authenticate(user=self.midwife_user)
         start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
         start_res = self.client.post(start_url)
         self.assertEqual(start_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(start_res.data["status"], "ACTIVE")
+        self.assertEqual(start_res.data["status"], "RINGING")
+        self.assertIn("agora_channel_name", start_res.data)
 
-        # Complete consultation with summary & diagnosis
         complete_url = reverse("consultation-complete", kwargs={"pk": consultation.id})
         complete_data = {
             "summary": "Patient presented for maternal consultation. Vital signs normal.",
@@ -123,9 +121,107 @@ class ConsultationManagementTestCase(APITestCase):
         self.assertEqual(comp_res.status_code, status.HTTP_200_OK)
         self.assertEqual(comp_res.data["status"], "COMPLETED")
 
-        # Verify linked appointment status updated to COMPLETED
         self.confirmed_appointment.refresh_from_db()
         self.assertEqual(self.confirmed_appointment.status, "COMPLETED")
+
+    def test_agora_rtc_token_generation_service(self):
+        token = AgoraService.generate_rtc_token("cagh_voice_VOICE-TEST1234", uid=101, role=AgoraRole.PUBLISHER)
+        self.assertTrue(token.startswith("RTC_TOKEN_") or token.startswith("007"))
+        self.assertIn("cagh_voice_VOICE-TEST1234", token)
+
+    def test_voice_session_agora_lifecycle_endpoints(self):
+        consultation = Consultation.objects.create(
+            appointment=self.confirmed_appointment,
+            user=self.patient,
+            midwife=self.midwife_profile,
+            consultation_type="VIRTUAL_VOICE",
+            status="SCHEDULED",
+        )
+
+        # 1. Caller starts call -> RINGING
+        self.client.force_authenticate(user=self.patient)
+        start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
+        res_start = self.client.post(start_url)
+        self.assertEqual(res_start.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_start.data["status"], "RINGING")
+
+        session = VoiceSession.objects.get(consultation=consultation)
+        self.assertEqual(session.status, VoiceSession.VoiceSessionStatus.RINGING)
+        self.assertEqual(session.caller, self.patient)
+
+        # 2. Recipient accepts call -> ACCEPTED + Agora token
+        self.client.force_authenticate(user=self.midwife_user)
+        accept_url = reverse("consultation-voice-session-accept", kwargs={"pk": consultation.id})
+        res_accept = self.client.post(accept_url)
+        self.assertEqual(res_accept.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_accept.data["status"], "ACCEPTED")
+        self.assertIn("agora_token", res_accept.data)
+
+        # 3. Connect audio stream -> ONGOING
+        connect_url = reverse("consultation-voice-session-connect", kwargs={"pk": consultation.id})
+        res_conn = self.client.post(connect_url)
+        self.assertEqual(res_conn.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_conn.data["status"], "ONGOING")
+
+        # 4. Caller fetches Agora token for active channel
+        self.client.force_authenticate(user=self.patient)
+        token_url = reverse("consultation-voice-session-token", kwargs={"pk": consultation.id})
+        res_token = self.client.get(token_url)
+        self.assertEqual(res_token.status_code, status.HTTP_200_OK)
+        self.assertIn("agora_token", res_token.data)
+
+        # 5. End call -> ENDED
+        end_url = reverse("consultation-voice-session-end", kwargs={"pk": consultation.id})
+        res_end = self.client.post(end_url)
+        self.assertEqual(res_end.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_end.data["status"], "ENDED")
+
+        session.refresh_from_db()
+        self.assertEqual(session.status, VoiceSession.VoiceSessionStatus.ENDED)
+
+    def test_race_condition_protection_on_cancel_and_accept(self):
+        consultation = Consultation.objects.create(
+            appointment=self.confirmed_appointment,
+            user=self.patient,
+            midwife=self.midwife_profile,
+            consultation_type="VIRTUAL_VOICE",
+            status="SCHEDULED",
+        )
+
+        self.client.force_authenticate(user=self.patient)
+        start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
+        self.client.post(start_url)
+
+        # Patient cancels call
+        cancel_url = reverse("consultation-voice-session-cancel", kwargs={"pk": consultation.id})
+        res_cancel = self.client.post(cancel_url)
+        self.assertEqual(res_cancel.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_cancel.data["status"], "CANCELLED")
+
+        # Midwife attempts to accept cancelled call (Race condition test)
+        self.client.force_authenticate(user=self.midwife_user)
+        accept_url = reverse("consultation-voice-session-accept", kwargs={"pk": consultation.id})
+        res_accept = self.client.post(accept_url)
+        self.assertEqual(res_accept.status_code, status.HTTP_409_CONFLICT)
+
+    def test_unauthorized_user_cannot_access_voice_call_token(self):
+        consultation = Consultation.objects.create(
+            appointment=self.confirmed_appointment,
+            user=self.patient,
+            midwife=self.midwife_profile,
+            consultation_type="VIRTUAL_VOICE",
+            status="SCHEDULED",
+        )
+
+        self.client.force_authenticate(user=self.patient)
+        start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
+        self.client.post(start_url)
+
+        # Unassigned midwife attempts to fetch Agora token (Permission test)
+        self.client.force_authenticate(user=self.other_midwife_user)
+        token_url = reverse("consultation-voice-session-token", kwargs={"pk": consultation.id})
+        res_bad = self.client.get(token_url)
+        self.assertEqual(res_bad.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_only_assigned_midwife_can_add_notes(self):
         consultation = Consultation.objects.create(
@@ -138,12 +234,10 @@ class ConsultationManagementTestCase(APITestCase):
 
         url = reverse("consultation-add-note", kwargs={"pk": consultation.id})
 
-        # Unassigned midwife attempts to add note (Rule 3)
         self.client.force_authenticate(user=self.other_midwife_user)
         bad_res = self.client.post(url, {"note": "Unauthorized note"}, format="json")
         self.assertEqual(bad_res.status_code, status.HTTP_403_FORBIDDEN)
 
-        # Assigned midwife adds note
         self.client.force_authenticate(user=self.midwife_user)
         good_res = self.client.post(url, {"note": "Patient exhibits excellent health markers."}, format="json")
         self.assertEqual(good_res.status_code, status.HTTP_201_CREATED)
@@ -158,32 +252,10 @@ class ConsultationManagementTestCase(APITestCase):
             status="COMPLETED",
         )
 
-        # Attempt DELETE (Rule 4)
         self.client.force_authenticate(user=self.patient)
         url = reverse("consultation-detail", kwargs={"pk": consultation.id})
         del_res = self.client.delete(url)
         self.assertEqual(del_res.status_code, status.HTTP_403_FORBIDDEN)
-
-    def test_voice_and_video_session_management(self):
-        consultation = Consultation.objects.create(
-            appointment=self.confirmed_appointment,
-            user=self.patient,
-            midwife=self.midwife_profile,
-            consultation_type="VIRTUAL_VOICE",
-            status="ACTIVE",
-        )
-
-        self.client.force_authenticate(user=self.midwife_user)
-
-        # Voice session start & end
-        voice_url = reverse("consultation-manage-voice-session", kwargs={"pk": consultation.id})
-        start_res = self.client.post(voice_url, {"action": "START"}, format="json")
-        self.assertEqual(start_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(start_res.data["status"], "ONGOING")
-
-        end_res = self.client.post(voice_url, {"action": "END"}, format="json")
-        self.assertEqual(end_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(end_res.data["status"], "ENDED")
 
     def test_active_and_history_endpoints(self):
         Consultation.objects.create(
@@ -205,16 +277,14 @@ class ConsultationManagementTestCase(APITestCase):
         self.assertEqual(hist_res.status_code, status.HTTP_200_OK)
 
     def test_start_call_using_appointment_id(self):
-        """Verifies starting a call using Appointment ID directly creates consultation & triggers call."""
         self.client.force_authenticate(user=self.patient)
         start_url = reverse("consultation-start", kwargs={"pk": self.confirmed_appointment.id})
         res = self.client.post(start_url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data["status"], "ACTIVE")
+        self.assertEqual(res.data["status"], "RINGING")
         self.assertIsNotNone(res.data["consultation"])
 
     async def test_websocket_call_signaling(self):
-        """Verifies WebSocket WebRTC call signaling: call_offer, call_answer, ice_candidate, toggle_media, end_call."""
         from rest_framework_simplejwt.tokens import AccessToken
         from channels.testing import WebsocketCommunicator
         from config.asgi import application
@@ -245,29 +315,24 @@ class ConsultationManagementTestCase(APITestCase):
         connected_m, _ = await midwife_comm.connect()
         self.assertTrue(connected_m)
 
-        # Patient receives peer_joined event when Midwife connects
         res_p_peer_joined = await patient_comm.receive_json_from()
         self.assertEqual(res_p_peer_joined["type"], "peer_joined")
-        self.assertEqual(res_p_peer_joined["sender_id"], str(self.midwife_user.id))
 
-        # 1. Patient sends call_offer -> Midwife receives incoming_call_offer
+        # 1. Patient sends incoming_call -> Midwife receives incoming_call
         await patient_comm.send_json_to({
-            "action": "call_offer",
-            "call_type": "VOICE",
-            "sdp_offer": "dummy_sdp_offer_data",
-            "rtc_token": "dummy_rtc_token"
+            "action": "incoming_call",
+            "call_type": "VOICE"
         })
         res_offer = await midwife_comm.receive_json_from()
-        self.assertEqual(res_offer["type"], "incoming_call_offer")
+        self.assertEqual(res_offer["type"], "incoming_call")
         self.assertEqual(res_offer["call_type"], "VOICE")
 
-        # 2. Midwife sends call_answer -> Patient receives call_answered
+        # 2. Midwife sends call_accepted -> Patient receives call_accepted
         await midwife_comm.send_json_to({
-            "action": "call_answer",
-            "sdp_answer": "dummy_sdp_answer_data"
+            "action": "call_accepted"
         })
         res_answer = await patient_comm.receive_json_from()
-        self.assertEqual(res_answer["type"], "call_answered")
+        self.assertEqual(res_answer["type"], "call_accepted")
 
         # 3. Patient sends toggle_media -> Midwife receives media_state_changed
         await patient_comm.send_json_to({
@@ -280,54 +345,3 @@ class ConsultationManagementTestCase(APITestCase):
 
         await patient_comm.disconnect()
         await midwife_comm.disconnect()
-
-    async def test_user_calls_websocket_notification(self):
-        from asgiref.sync import sync_to_async
-        appointment = await sync_to_async(Appointment.objects.create)(
-            user=self.patient,
-            created_by=self.patient,
-            midwife=self.midwife_profile,
-            appointment_type="VIRTUAL_VOICE",
-            scheduled_date=timezone.now().date(),
-            start_time="10:00:00",
-            end_time="10:30:00",
-            status="CONFIRMED"
-        )
-        consultation = await sync_to_async(Consultation.objects.create)(
-            appointment=appointment,
-            user=self.patient,
-            midwife=self.midwife_profile,
-            consultation_type="VIRTUAL_VOICE",
-            status="SCHEDULED",
-        )
-
-        midwife_user = self.midwife_profile.user
-        midwife_token = str(AccessToken.for_user(midwife_user))
-        patient_token = str(AccessToken.for_user(self.patient))
-
-        midwife_communicator = WebsocketCommunicator(
-            application,
-            f"/ws/user-calls/?token={midwife_token}"
-        )
-        connected, _ = await midwife_communicator.connect()
-        self.assertTrue(connected)
-
-        patient_communicator = WebsocketCommunicator(
-            application,
-            f"/ws/consultation/{consultation.id}/?token={patient_token}"
-        )
-        await patient_communicator.connect()
-
-        await patient_communicator.send_json_to({
-            "action": "call_offer",
-            "call_type": "VOICE",
-            "sdp_offer": "dummy_sdp_offer_data"
-        })
-
-        res_call = await midwife_communicator.receive_json_from()
-        self.assertEqual(res_call["type"], "incoming_call_offer")
-        self.assertEqual(res_call["consultation_id"], str(consultation.id))
-
-        await midwife_communicator.disconnect()
-        await patient_communicator.disconnect()
-

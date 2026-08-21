@@ -67,19 +67,33 @@ class ConsultationNote(models.Model):
 class VoiceSession(models.Model):
     class VoiceSessionStatus(models.TextChoices):
         INITIATED = 'INITIATED', _('Initiated')
+        RINGING = 'RINGING', _('Ringing')
+        ACCEPTED = 'ACCEPTED', _('Accepted')
         ONGOING = 'ONGOING', _('Ongoing')
+        DECLINED = 'DECLINED', _('Declined')
+        MISSED = 'MISSED', _('Missed')
+        CANCELLED = 'CANCELLED', _('Cancelled')
         ENDED = 'ENDED', _('Ended')
         FAILED = 'FAILED', _('Failed')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     consultation = models.OneToOneField(Consultation, on_delete=models.CASCADE, related_name='voice_session')
+    caller = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='initiated_voice_sessions',
+        null=True,
+        blank=True
+    )
     session_key = models.CharField(max_length=255, unique=True)
+    agora_channel_name = models.CharField(max_length=255, unique=True, null=True, blank=True)
     status = models.CharField(max_length=20, choices=VoiceSessionStatus.choices, default=VoiceSessionStatus.INITIATED)
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Voice Session {self.session_key} - {self.status}"
+
 
 
 class VideoSession(models.Model):
