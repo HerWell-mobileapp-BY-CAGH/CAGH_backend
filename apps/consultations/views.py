@@ -279,7 +279,17 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
     @extend_schema(
+        summary="Start consultation call ringing (Voice Session Alias)",
+        tags=["Consultations"],
+        responses={200: VoiceStartResponseSerializer}
+    )
+    @action(detail=True, methods=['post'], url_path='voice-session/start')
+    def voice_session_start(self, request, pk=None):
+        return self.start(request, pk=pk)
+
+    @extend_schema(
         summary="Accept Voice Call & Retrieve Signed Agora Token",
+
         tags=["Consultations"],
         responses={200: VoiceAcceptResponseSerializer}
     )

@@ -305,6 +305,8 @@ else:
                         "health_check_interval": 30,
                         "socket_keepalive": True,
                         "retry_on_timeout": True,
+                        "socket_timeout": 15,
+                        "socket_connect_timeout": 15,
                     }
                 ],
             },
