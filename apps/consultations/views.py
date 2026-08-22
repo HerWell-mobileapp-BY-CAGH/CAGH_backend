@@ -343,7 +343,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'agora_channel_name': agora_channel_name,
             'agora_app_id': agora_app_id,
             'agora_token': agora_token,
-            'uid': caller.id,
+            'uid': AgoraService.get_numeric_uid(caller.id),
             'caller_id': str(caller.id),
             'caller_name': caller_name,
             'recipient_id': str(recipient.id) if recipient else "",
@@ -438,7 +438,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'agora_channel_name': session.agora_channel_name,
             'agora_app_id': agora_app_id,
             'agora_token': token,
-            'uid': request.user.id,
+            'uid': AgoraService.get_numeric_uid(request.user.id),
             'started_at': session.started_at,
         }, status=status.HTTP_200_OK)
 
@@ -643,7 +643,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                 'agora_app_id': agora_app_id,
                 'agora_channel_name': session.agora_channel_name or "",
                 'agora_token': "",
-                'uid': request.user.id,
+                'uid': AgoraService.get_numeric_uid(request.user.id),
                 'session_key': session.session_key,
                 'status': session.status,
             }, status=status.HTTP_200_OK)
@@ -663,7 +663,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'agora_app_id': agora_app_id,
             'agora_channel_name': session.agora_channel_name,
             'agora_token': token,
-            'uid': request.user.id,
+            'uid': AgoraService.get_numeric_uid(request.user.id),
             'session_key': session.session_key,
             'status': session.status,
         }, status=status.HTTP_200_OK)

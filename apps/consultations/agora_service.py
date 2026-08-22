@@ -25,6 +25,16 @@ class AgoraService:
     """
 
     @staticmethod
+    def get_numeric_uid(user_id) -> int:
+        if not user_id:
+            return 0
+        try:
+            return int(user_id)
+        except (ValueError, TypeError):
+            s = str(user_id).replace('-', '').lower()
+            return int(hashlib.md5(s.encode('utf-8')).hexdigest()[:8], 16) % 100000000
+
+    @staticmethod
     def generate_rtc_token(
         channel_name: str,
         uid: int = 0,
@@ -43,11 +53,7 @@ class AgoraService:
         current_ts = int(time.time())
         privilege_expired_ts = current_ts + expire_seconds
 
-        # Ensure numeric uid
-        try:
-            numeric_uid = int(uid) if uid else 0
-        except (ValueError, TypeError):
-            numeric_uid = abs(hash(str(uid))) % 100000000
+        numeric_uid = AgoraService.get_numeric_uid(uid)
 
         # If App Certificate is not configured (e.g. dev environment without Agora cert), return structured test token
         if not app_certificate or app_certificate == '':
