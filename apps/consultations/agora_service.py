@@ -55,10 +55,10 @@ class AgoraService:
 
         numeric_uid = AgoraService.get_numeric_uid(uid)
 
-        # If App Certificate is not configured (e.g. dev environment without Agora cert), return structured test token
+        from django.core.exceptions import ImproperlyConfigured
         if not app_certificate or app_certificate == '':
-            logger.info(f"[AGORA SERVICE] App Certificate not configured. Returning local test token for channel '{channel_name}', uid {numeric_uid}.")
-            return f"RTC_TOKEN_{channel_name}_{numeric_uid}_{privilege_expired_ts}"
+            logger.error(f"[AGORA SERVICE ERROR] AGORA_APP_CERTIFICATE is not configured in settings or environment.")
+            raise ImproperlyConfigured("AGORA_APP_CERTIFICATE is required for signed RTC token generation.")
 
         # Build official signed Agora RTC Access Token (Version 007 payload)
         try:

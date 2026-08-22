@@ -1,8 +1,12 @@
 import json
+import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
 from .models import Consultation, VoiceSession, VideoSession
+from apps.appointments.models import Appointment
+
+logger = logging.getLogger(__name__)
 
 
 class ConsultationCallConsumer(AsyncWebsocketConsumer):
@@ -295,35 +299,29 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def check_consultation_membership(self, user, consultation_id):
+        if not user or user.is_anonymous:
+            return False
         try:
             consultation = Consultation.objects.filter(id=consultation_id).first()
             if not consultation:
                 appointment = Appointment.objects.filter(id=consultation_id).first()
                 if appointment:
                     consultation = getattr(appointment, 'consultation', None)
-                    if not consultation:
-                        consultation, _ = Consultation.objects.get_or_create(
-                            appointment=appointment,
-                            defaults={
-                                'user': appointment.user,
-                                'midwife': appointment.midwife,
-                                'consultation_type': appointment.appointment_type,
-                                'status': Consultation.ConsultationStatus.SCHEDULED,
-                            }
-                        )
-            if not consultation:
-                return True
 
-            if str(user.id) == str(consultation.user_id):
-                return True
-            if getattr(user, 'role', '') == 'MIDWIFE' or hasattr(user, 'midwife_profile'):
-                if not consultation.midwife or consultation.midwife == getattr(user, 'midwife_profile', None):
-                    return True
-            if user.is_staff or getattr(user, 'role', '') == 'ADMIN':
-                return True
-        except Exception:
-            pass
-        return True
+            if not consultation:
+                return False
+
+            is_patient = (str(user.id) == str(consultation.user_id))
+            is_midwife = (
+                (hasattr(user, 'midwife_profile') and consultation.midwife_id == user.midwife_profile.id) or
+                (consultation.midwife and hasattr(consultation.midwife, 'user') and str(consultation.midwife.user_id) == str(user.id))
+            )
+            is_admin = user.is_staff or getattr(user, 'role', '') == 'ADMIN'
+
+            return (is_patient or is_midwife or is_admin)
+        except Exception as e:
+            logger.error(f"[WS MEMBERSHIP CHECK ERROR] Failed for user {getattr(user, 'id', None)}: {e}")
+            return False
 
     @database_sync_to_async
     def update_call_status(self, consultation_id, call_type, status_val, caller_user=None):
