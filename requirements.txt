@@ -27,3 +27,7 @@ requests>=2.31.0
 pytest>=8.0.0
 pytest-django>=4.8.0
 
+# Notifications & Firebase
+firebase-admin>=6.5.0
+
+
