@@ -218,8 +218,15 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             consultation.save(update_fields=['status'])
 
             caller = request.user
-            recipient = consultation.user if is_midwife else (consultation.midwife.user if consultation.midwife else None)
-            if recipient and recipient.id == caller.id:
+            recipient = None
+            if is_midwife:
+                recipient = consultation.user
+            else:
+                if hasattr(consultation, 'midwife') and consultation.midwife:
+                    recipient = getattr(consultation.midwife, 'user', None) or consultation.midwife
+            if hasattr(recipient, 'user') and recipient.user:
+                recipient = recipient.user
+            if recipient and str(recipient.id) == str(caller.id):
                 recipient = None
 
 
@@ -227,37 +234,29 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             agora_channel_name = None
             call_type = "VOICE"
 
-            if consultation.consultation_type in (Consultation.ConsultationType.VIRTUAL_VOICE, 'VIRTUAL_VOICE'):
-                session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
-                if not session:
-                    session_key = f"VOICE-{uuid.uuid4().hex[:12].upper()}"
-                    session = VoiceSession.objects.create(
-                        consultation=consultation,
-                        session_key=session_key,
-                        agora_channel_name=f"cagh_voice_{session_key}",
-                        status=VoiceSession.VoiceSessionStatus.RINGING,
-                        caller=caller,
-                    )
-                else:
-                    session.status = VoiceSession.VoiceSessionStatus.RINGING
-                    session.caller = caller
-                    session.ended_at = None
-                    if not session.agora_channel_name:
-                        session.agora_channel_name = f"cagh_voice_{session.session_key}"
-                    session.save()
-
-                session_key = session.session_key
-                agora_channel_name = session.agora_channel_name
-                call_type = "VOICE"
-
-            elif consultation.consultation_type in (Consultation.ConsultationType.VIRTUAL_VIDEO, 'VIRTUAL_VIDEO'):
-                session, _ = VideoSession.objects.select_for_update().get_or_create(
+            # Handle both VIRTUAL_VOICE and VIRTUAL_VIDEO consultations seamlessly
+            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            if not session:
+                session_key = f"VOICE-{uuid.uuid4().hex[:12].upper()}"
+                session = VoiceSession.objects.create(
                     consultation=consultation,
-                    defaults={"session_key": f"VIDEO-{uuid.uuid4().hex[:12].upper()}", "status": VideoSession.VideoSessionStatus.INITIATED}
+                    session_key=session_key,
+                    agora_channel_name=f"cagh_voice_{session_key}",
+                    status=VoiceSession.VoiceSessionStatus.RINGING,
+                    caller=caller,
                 )
-                session_key = session.session_key
-                agora_channel_name = f"cagh_video_{session_key}"
-                call_type = "VIDEO"
+            else:
+                session.status = VoiceSession.VoiceSessionStatus.RINGING
+                session.caller = caller
+                session.started_at = None
+                session.ended_at = None
+                if not session.agora_channel_name:
+                    session.agora_channel_name = f"cagh_voice_{session.session_key}"
+                session.save()
+
+            session_key = session.session_key
+            agora_channel_name = session.agora_channel_name
+            call_type = "VOICE"
 
         # FCM Call Notification (Graceful fallback if FCM token missing or push fails)
         try:
@@ -390,6 +389,34 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             if not consultation.started_at:
                 consultation.started_at = timezone.now()
             consultation.save()
+
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                ws_accept_payload = {
+                    'type': 'broadcast_call_accepted',
+                    'action': 'call_accepted',
+                    'event': 'call_accepted',
+                    'sender_id': str(request.user.id),
+                    'consultation_id': str(consultation.id),
+                }
+                async_to_sync(channel_layer.group_send)(
+                    f"consultation_call_{consultation.id}",
+                    ws_accept_payload
+                )
+                if session and session.caller:
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_calls_{session.caller.id}",
+                        {
+                            'type': 'broadcast_user_incoming_call',
+                            'data': ws_accept_payload
+                        }
+                    )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error broadcasting call accepted: {e}")
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         token = AgoraService.generate_rtc_token(
@@ -533,7 +560,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         tags=["Consultations"],
         responses={200: VoiceTokenResponseSerializer}
     )
-    @action(detail=True, methods=['get', 'post'], url_path='voice-session/token')
+    @action(detail=True, methods=['get', 'post'], url_path='voice-session/token', serializer_class=VoiceTokenResponseSerializer)
     def voice_session_token(self, request, pk=None):
         consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
 
@@ -543,8 +570,16 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         session = consultation.voice_session
         self._check_and_auto_expire_ringing_session(session)
 
+        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         if session.status in [VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.ENDED, VoiceSession.VoiceSessionStatus.FAILED]:
-            return Response({'error': f"Cannot issue token. Voice session is in '{session.status}' state."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                'agora_app_id': agora_app_id,
+                'agora_channel_name': session.agora_channel_name or "",
+                'agora_token': "",
+                'uid': request.user.id,
+                'session_key': session.session_key,
+                'status': session.status,
+            }, status=status.HTTP_200_OK)
 
         if not session.agora_channel_name:
             session.agora_channel_name = f"cagh_voice_{session.session_key}"
