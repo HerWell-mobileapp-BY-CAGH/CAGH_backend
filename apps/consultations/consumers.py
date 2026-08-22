@@ -367,23 +367,22 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         try:
             sender_id = str(getattr(sender_user, 'id', ''))
 
+            patient_id = ''
+            midwife_user_id = ''
+
             consultation = Consultation.objects.filter(id=consultation_id).first()
             if not consultation:
                 appointment = Appointment.objects.filter(id=consultation_id).first()
                 if appointment:
                     patient_id = str(appointment.user.id) if appointment.user else ''
                     midwife_user_id = str(appointment.midwife.user.id) if (appointment.midwife and hasattr(appointment.midwife, 'user') and appointment.midwife.user) else ''
-                    if sender_id == patient_id:
-                        return midwife_user_id
-                    else:
-                        return patient_id
-            elif consultation:
+            else:
                 patient_id = str(consultation.user.id) if consultation.user else ''
                 midwife_user_id = str(consultation.midwife.user.id) if (consultation.midwife and hasattr(consultation.midwife, 'user') and consultation.midwife.user) else ''
-                if sender_id == patient_id:
-                    return midwife_user_id
-                else:
-                    return patient_id
+
+            recipient_id = midwife_user_id if sender_id == patient_id else patient_id
+            if recipient_id and recipient_id != sender_id:
+                return recipient_id
         except Exception:
             pass
         return None
@@ -428,4 +427,10 @@ class UserCallConsumer(AsyncWebsocketConsumer):
             pass
 
     async def broadcast_user_incoming_call(self, event):
-        await self.send(text_data=json.dumps(event['data']))
+        user = self.scope.get('user')
+        data = event.get('data', {})
+        sender_id = str(data.get('sender_id', ''))
+        if user and sender_id and sender_id == str(user.id):
+            return  # Strictly ignore self-call notification
+        await self.send(text_data=json.dumps(data))
+

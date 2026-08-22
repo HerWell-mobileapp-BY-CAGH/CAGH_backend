@@ -219,6 +219,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
 
             caller = request.user
             recipient = consultation.user if is_midwife else (consultation.midwife.user if consultation.midwife else None)
+            if recipient and recipient.id == caller.id:
+                recipient = None
+
 
             session_key = None
             agora_channel_name = None

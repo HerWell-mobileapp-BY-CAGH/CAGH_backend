@@ -8,11 +8,14 @@ logger = logging.getLogger(__name__)
 def send_incoming_call_notification(caller, recipient, consultation, call_type="VOICE", session_key=None):
     """
     Triggers an in-app Notification and high-priority FCM call push notification to ring the recipient device.
+    Strictly prevents self-calling (caller == recipient).
     """
-    if not recipient:
+    if not recipient or (hasattr(recipient, 'id') and recipient.id == caller.id):
+        logger.info(f"[CALL NOTIFICATION SKIPPED] Recipient is missing or identical to caller (caller_id={getattr(caller, 'id', None)}).")
         return None
 
     caller_name = getattr(caller, 'get_full_name', lambda: '')() or caller.username or "Healthcare Provider"
+
     title = f"Incoming {call_type.title()} Call"
     body = f"{caller_name} is calling you for your scheduled consultation."
 
