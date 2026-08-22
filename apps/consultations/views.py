@@ -373,6 +373,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
+            if session.status == VoiceSession.VoiceSessionStatus.DECLINED:
+                return Response({'status': 'DECLINED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
+
             if session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
                 return Response(
                     {"error": f"Cannot decline call. Call status is '{session.status}'."},
@@ -397,6 +400,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
+
+            if session.status == VoiceSession.VoiceSessionStatus.CANCELLED:
+                return Response({'status': 'CANCELLED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
 
             if session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
                 return Response(
@@ -423,6 +429,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
+            if session.status == VoiceSession.VoiceSessionStatus.MISSED:
+                return Response({'status': 'MISSED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
+
             session.status = VoiceSession.VoiceSessionStatus.MISSED
             session.ended_at = timezone.now()
             session.save()
@@ -442,11 +451,15 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
+            if session.status in [VoiceSession.VoiceSessionStatus.ENDED, VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.FAILED]:
+                return Response({'status': session.status, 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
+
             session.status = VoiceSession.VoiceSessionStatus.ENDED
             session.ended_at = timezone.now()
             session.save()
 
         return Response({'status': 'ENDED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
+
 
     @extend_schema(
         summary="Get authorized short-lived Agora Token for active call",
