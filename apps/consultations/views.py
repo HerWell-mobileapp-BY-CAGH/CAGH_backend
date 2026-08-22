@@ -151,6 +151,21 @@ class ConsultationViewSet(viewsets.ModelViewSet):
 
         return consultation, is_patient, is_midwife
 
+    def _get_display_name(self, u):
+        if not u:
+            return ""
+        if hasattr(u, 'profile') and u.profile:
+            fn = getattr(u.profile, 'first_name', '').strip()
+            ln = getattr(u.profile, 'last_name', '').strip()
+            if fn or ln:
+                return f"{fn} {ln}".strip()
+        if hasattr(u, 'first_name') and (getattr(u, 'first_name', '') or getattr(u, 'last_name', '')):
+            fn = getattr(u, 'first_name', '').strip()
+            ln = getattr(u, 'last_name', '').strip()
+            if fn or ln:
+                return f"{fn} {ln}".strip()
+        return getattr(u, 'username', '')
+
     def _check_and_auto_expire_ringing_session(self, session):
         """
         Backend safety check: Auto-expires a ringing call if no response within RINGING_TIMEOUT_SECONDS.
@@ -267,20 +282,8 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         serializer = self.get_serializer(consultation)
 
-        def _get_display_name(u):
-            if not u:
-                return ""
-            if hasattr(u, 'profile') and u.profile:
-                fn = getattr(u.profile, 'first_name', '').strip()
-                ln = getattr(u.profile, 'last_name', '').strip()
-                if fn or ln:
-                    return f"{fn} {ln}".strip()
-            if hasattr(u, 'first_name') and (u.first_name or u.last_name):
-                return f"{getattr(u, 'first_name', '')} {getattr(u, 'last_name', '')}".strip()
-            return getattr(u, 'username', '')
-
-        caller_name = _get_display_name(caller) or getattr(caller, 'username', 'Caller')
-        recipient_name = _get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
+        caller_name = self._get_display_name(caller) or getattr(caller, 'username', 'Caller')
+        recipient_name = self._get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
 
         if recipient:
             try:
@@ -432,6 +435,11 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             role=AgoraRole.PUBLISHER
         )
 
+        caller = session.caller
+        recipient = consultation.user if caller != consultation.user else (consultation.midwife.user if consultation.midwife else None)
+        caller_name = self._get_display_name(caller) or getattr(caller, 'username', 'Caller')
+        recipient_name = self._get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
+
         return Response({
             'status': 'ACCEPTED',
             'session_key': session.session_key,
@@ -440,6 +448,10 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'agora_token': token,
             'uid': AgoraService.get_numeric_uid(request.user.id),
             'started_at': session.started_at,
+            'caller_id': str(caller.id) if caller else "",
+            'caller_name': caller_name,
+            'recipient_id': str(recipient.id) if recipient else "",
+            'recipient_name': recipient_name,
         }, status=status.HTTP_200_OK)
 
     @extend_schema(
@@ -659,6 +671,11 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             role=AgoraRole.PUBLISHER
         )
 
+        caller = session.caller
+        recipient = consultation.user if caller != consultation.user else (consultation.midwife.user if consultation.midwife else None)
+        caller_name = self._get_display_name(caller) or getattr(caller, 'username', 'Caller')
+        recipient_name = self._get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
+
         return Response({
             'agora_app_id': agora_app_id,
             'agora_channel_name': session.agora_channel_name,
@@ -666,6 +683,11 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'uid': AgoraService.get_numeric_uid(request.user.id),
             'session_key': session.session_key,
             'status': session.status,
+            'started_at': session.started_at,
+            'caller_id': str(caller.id) if caller else "",
+            'caller_name': caller_name,
+            'recipient_id': str(recipient.id) if recipient else "",
+            'recipient_name': recipient_name,
         }, status=status.HTTP_200_OK)
 
     @extend_schema(summary="Manage Virtual Voice Session status", tags=["Consultations"])
