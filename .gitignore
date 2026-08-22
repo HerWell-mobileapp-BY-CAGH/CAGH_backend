@@ -42,7 +42,7 @@ staticfiles/
 # Environment variables & Secret Keys
 .env
 firebase-service-account.json
-*.json
+
 
 # Docker
 .docker/
