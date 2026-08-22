@@ -39,8 +39,10 @@ db.sqlite3-journal
 media/
 staticfiles/
 
-# Environment variables
+# Environment variables & Secret Keys
 .env
+firebase-service-account.json
+*.json
 
 # Docker
 .docker/
