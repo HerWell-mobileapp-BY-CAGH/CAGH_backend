@@ -268,6 +268,69 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         serializer = self.get_serializer(consultation)
 
+        def _get_display_name(u):
+            if not u:
+                return ""
+            if hasattr(u, 'profile') and u.profile:
+                fn = getattr(u.profile, 'first_name', '').strip()
+                ln = getattr(u.profile, 'last_name', '').strip()
+                if fn or ln:
+                    return f"{fn} {ln}".strip()
+            if hasattr(u, 'first_name') and (u.first_name or u.last_name):
+                return f"{getattr(u, 'first_name', '')} {getattr(u, 'last_name', '')}".strip()
+            return getattr(u, 'username', '')
+
+        caller_name = _get_display_name(caller) or getattr(caller, 'username', 'Caller')
+        recipient_name = _get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
+
+        if recipient:
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    ws_payload = {
+                        'type': 'incoming_call',
+                        'action': 'incoming_call',
+                        'event': 'incoming_call',
+                        'consultation_id': str(consultation.id),
+                        'appointment_id': str(consultation.appointment.id) if consultation.appointment else str(consultation.id),
+                        'sender_id': str(caller.id),
+                        'caller_id': str(caller.id),
+                        'sender_name': caller_name,
+                        'caller_name': caller_name,
+                        'receiver_id': str(recipient.id),
+                        'recipient_id': str(recipient.id),
+                        'receiver_name': recipient_name,
+                        'recipient_name': recipient_name,
+                        'call_type': call_type,
+                        'agora_channel_name': agora_channel_name,
+                        'agora_app_id': agora_app_id,
+                    }
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_calls_{recipient.id}",
+                        {
+                            'type': 'broadcast_user_incoming_call',
+                            'data': ws_payload,
+                        }
+                    )
+                    async_to_sync(channel_layer.group_send)(
+                        f"consultation_call_{consultation.id}",
+                        {
+                            'type': 'broadcast_incoming_call',
+                            'sender_id': str(caller.id),
+                            'sender_name': caller_name,
+                            'call_type': call_type,
+                            'consultation_id': str(consultation.id),
+                        }
+                    )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"WebSocket call notification error: {e}")
+
+        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
+        serializer = self.get_serializer(consultation)
+
         return Response({
             'status': 'RINGING',
             'started_at': consultation.started_at,
@@ -276,8 +339,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'agora_channel_name': agora_channel_name,
             'agora_app_id': agora_app_id,
             'caller_id': str(caller.id),
+            'caller_name': caller_name,
             'recipient_id': str(recipient.id) if recipient else "",
-            'recipient_name': getattr(recipient, 'username', 'Midwife'),
+            'recipient_name': recipient_name,
             'consultation': serializer.data,
         }, status=status.HTTP_200_OK)
 
@@ -526,6 +590,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                 session.status = VoiceSession.VoiceSessionStatus.RINGING
                 session.caller = request.user
                 session.save()
+                return self.start(request, pk=pk)
             elif action_type == 'ACCEPT':
                 session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
                 if not session.started_at:
