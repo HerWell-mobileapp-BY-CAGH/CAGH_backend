@@ -202,6 +202,15 @@ class AuthenticationTestCase(APITestCase):
         )
         self.assertEqual(res_success.status_code, status.HTTP_200_OK)
 
+        # Log in as Midwife WITHOUT providing 'role' parameter in payload -> Should succeed!
+        res_no_role = self.client.post(
+            url,
+            {"email": "midwife_role@example.com", "password": "Password123!"},
+            format="json",
+        )
+        self.assertEqual(res_no_role.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_no_role.data["user"]["role"], User.Role.MIDWIFE)
+
     def test_otp_login_role_mismatch_fails(self):
         midwife = User.objects.create_user(
             username="midwife_otp_user",
@@ -227,6 +236,18 @@ class AuthenticationTestCase(APITestCase):
         )
         self.assertEqual(res_denied.status_code, status.HTTP_401_UNAUTHORIZED)
         self.assertIn("Access denied", res_denied.data.get("error", ""))
+
+        # OTP login as Midwife WITHOUT role parameter -> Should succeed!
+        otp.is_verified = False
+        otp.expires_at = timezone.now() + timedelta(minutes=10)
+        otp.save()
+        res_no_role_otp = self.client.post(
+            url,
+            {"phone_number_or_email": "+251911998877", "otp_code": "123456"},
+            format="json",
+        )
+        self.assertEqual(res_no_role_otp.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_no_role_otp.data["user"]["role"], User.Role.MIDWIFE)
 
 
 class UserManagementTestCase(APITestCase):

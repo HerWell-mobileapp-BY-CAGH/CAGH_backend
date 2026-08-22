@@ -94,13 +94,25 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             user.role = User.Role.MIDWIFE
             user.save(update_fields=['role'])
 
-        # Determine target requested role (if omitted by frontend login, default to PATIENT access)
-        target_requested_role = requested_role_raw or "PATIENT"
+        # Auto-heal: If user.role is MIDWIFE but lacks MidwifeProfile, create default profile
+        if user.role == User.Role.MIDWIFE and not hasattr(user, 'midwife_profile'):
+            from apps.midwives.models import MidwifeProfile
+            import uuid
+            MidwifeProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
+                    "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                }
+            )
+
+        # Determine target requested role (if omitted by frontend login, default to user's registered role)
+        target_requested_role = requested_role_raw or user.role
 
         normalized_requested = User.Role.normalize(target_requested_role)
         normalized_user_role = User.Role.normalize(user.role)
 
-        if normalized_user_role != normalized_requested and not user.is_staff:
+        if requested_role_raw and normalized_user_role != normalized_requested and not user.is_staff:
             raise AuthenticationFailed(
                 f"Access denied: This account is registered as a {user.role} and cannot log in as a {normalized_requested}.",
                 code="role_mismatch",
@@ -109,16 +121,12 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         self.user = user
         refresh = self.get_token(self.user)
 
+        from apps.users.user_serializers import UserSerializer
+
         data = {
             "refresh": str(refresh),
             "access": str(refresh.access_token),
-            "user": {
-                "id": str(self.user.id),
-                "username": self.user.username,
-                "email": self.user.email,
-                "role": self.user.role,
-                "phone_number": self.user.phone_number,
-            },
+            "user": UserSerializer(self.user).data,
         }
 
         return data
