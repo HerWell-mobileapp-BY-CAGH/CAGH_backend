@@ -156,7 +156,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         Backend safety check: Auto-expires a ringing call if no response within RINGING_TIMEOUT_SECONDS.
         """
         if session and session.status == VoiceSession.VoiceSessionStatus.RINGING:
-            reference_time = session.started_at or session.consultation.updated_at
+            reference_time = getattr(session, 'updated_at', None) or session.started_at or session.consultation.updated_at
             if reference_time and (timezone.now() - reference_time) > timedelta(seconds=RINGING_TIMEOUT_SECONDS):
                 session.status = VoiceSession.VoiceSessionStatus.MISSED
                 session.ended_at = timezone.now()
