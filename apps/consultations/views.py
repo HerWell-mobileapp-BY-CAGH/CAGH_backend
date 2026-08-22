@@ -328,6 +328,11 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                 logging.getLogger(__name__).error(f"WebSocket call notification error: {e}")
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
+        agora_token = AgoraService.generate_rtc_token(
+            channel_name=agora_channel_name,
+            uid=caller.id,
+            role=AgoraRole.PUBLISHER
+        )
         serializer = self.get_serializer(consultation)
 
         return Response({
@@ -337,6 +342,8 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'session_key': session_key,
             'agora_channel_name': agora_channel_name,
             'agora_app_id': agora_app_id,
+            'agora_token': agora_token,
+            'uid': caller.id,
             'caller_id': str(caller.id),
             'caller_name': caller_name,
             'recipient_id': str(recipient.id) if recipient else "",
@@ -480,6 +487,25 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             session.ended_at = timezone.now()
             session.save()
 
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    ws_payload = {
+                        'type': 'broadcast_call_declined',
+                        'action': 'call_declined',
+                        'event': 'call_declined',
+                        'status': 'DECLINED',
+                        'sender_id': str(request.user.id),
+                        'consultation_id': str(consultation.id),
+                    }
+                    async_to_sync(channel_layer.group_send)(f"consultation_call_{consultation.id}", ws_payload)
+                    if session and session.caller:
+                        async_to_sync(channel_layer.group_send)(f"user_calls_{session.caller.id}", {'type': 'broadcast_user_incoming_call', 'data': ws_payload})
+            except Exception:
+                pass
+
         return Response({'status': 'DECLINED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
 
     @extend_schema(
@@ -507,6 +533,26 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             session.status = VoiceSession.VoiceSessionStatus.CANCELLED
             session.ended_at = timezone.now()
             session.save()
+
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    ws_payload = {
+                        'type': 'broadcast_call_cancelled',
+                        'action': 'call_cancelled',
+                        'event': 'call_cancelled',
+                        'status': 'CANCELLED',
+                        'sender_id': str(request.user.id),
+                        'consultation_id': str(consultation.id),
+                    }
+                    async_to_sync(channel_layer.group_send)(f"consultation_call_{consultation.id}", ws_payload)
+                    recipient_id = consultation.user_id if request.user.id != consultation.user_id else (consultation.midwife.user_id if consultation.midwife and hasattr(consultation.midwife, 'user') else None)
+                    if recipient_id:
+                        async_to_sync(channel_layer.group_send)(f"user_calls_{recipient_id}", {'type': 'broadcast_user_incoming_call', 'data': ws_payload})
+            except Exception:
+                pass
 
         return Response({'status': 'CANCELLED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
 
@@ -551,6 +597,27 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             session.status = VoiceSession.VoiceSessionStatus.ENDED
             session.ended_at = timezone.now()
             session.save()
+
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    ws_payload = {
+                        'type': 'broadcast_call_ended',
+                        'action': 'call_ended',
+                        'event': 'call_ended',
+                        'ended_at': session.ended_at.isoformat() if session.ended_at else None,
+                        'status': 'ENDED',
+                        'sender_id': str(request.user.id),
+                        'consultation_id': str(consultation.id),
+                    }
+                    async_to_sync(channel_layer.group_send)(f"consultation_call_{consultation.id}", ws_payload)
+                    recipient_id = consultation.user_id if request.user.id != consultation.user_id else (consultation.midwife.user_id if consultation.midwife and hasattr(consultation.midwife, 'user') else None)
+                    if recipient_id:
+                        async_to_sync(channel_layer.group_send)(f"user_calls_{recipient_id}", {'type': 'broadcast_user_incoming_call', 'data': ws_payload})
+            except Exception:
+                pass
 
         return Response({'status': 'ENDED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
 
