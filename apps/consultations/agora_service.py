@@ -27,10 +27,16 @@ class AgoraService:
         if not user_id:
             return 0
         try:
-            return int(user_id)
+            candidate = int(user_id)
         except (ValueError, TypeError):
             s = str(user_id).replace('-', '').lower()
-            return int(hashlib.md5(s.encode('utf-8')).hexdigest()[:8], 16) % 100000000
+            candidate = int(hashlib.md5(s.encode('utf-8')).hexdigest()[:8], 16)
+
+        # Agora requires uid to fit in a 32-bit unsigned integer (max 4294967295).
+        # Enforce this regardless of input size/type to prevent oversized UIDs
+        # from ever reaching the token builder.
+        safe_uid = candidate % 4294967295
+        return safe_uid if safe_uid != 0 else 1
 
     @staticmethod
     def generate_rtc_token(
