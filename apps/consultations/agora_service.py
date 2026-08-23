@@ -68,8 +68,10 @@ class AgoraService:
                 role=role,
                 privilegeExpiredTs=privilege_expired_ts
             )
+            if not token:
+                raise ValueError("RtcTokenBuilder.buildTokenWithUid returned empty or None token.")
             return token
         except Exception as e:
-            logger.error(f"[AGORA SERVICE ERROR] Token generation failed: {e}")
-            return f"RTC_TOKEN_{channel_name}_{numeric_uid}_{privilege_expired_ts}"
+            logger.error(f"[AGORA SERVICE ERROR] Token generation failed: {e}", exc_info=True)
+            raise
 
