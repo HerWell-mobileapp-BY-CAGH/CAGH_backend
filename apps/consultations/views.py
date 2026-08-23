@@ -626,7 +626,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         tags=["Consultations"],
         responses={200: VoiceTokenResponseSerializer}
     )
-    @action(detail=True, methods=['get', 'post'], url_path='voice-session/token', serializer_class=VoiceTokenResponseSerializer)
+    @action(detail=True, methods=['get', 'post'], url_path='voice-session/token')
     def voice_session_token(self, request, pk=None):
         consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
 
