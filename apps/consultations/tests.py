@@ -203,6 +203,46 @@ class ConsultationManagementTestCase(APITestCase):
         res_accept = self.client.post(accept_url)
         self.assertEqual(res_accept.status_code, status.HTTP_409_CONFLICT)
 
+    def test_fallback_manage_voice_session_status_guard_and_broadcast(self):
+        consultation = Consultation.objects.create(
+            appointment=self.confirmed_appointment,
+            user=self.patient,
+            midwife=self.midwife_profile,
+            consultation_type="VIRTUAL_VOICE",
+            status="SCHEDULED",
+        )
+
+        # 1. Caller starts call via manage_voice_session fallback (POST /voice-session/ with {'action': 'START'})
+        self.client.force_authenticate(user=self.patient)
+        manage_url = reverse("consultation-manage-voice-session", kwargs={"pk": consultation.id})
+        res_start = self.client.post(manage_url, {"action": "START"}, format="json")
+        self.assertEqual(res_start.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_start.data["status"], "RINGING")
+
+        # 2. Patient cancels call via manage_voice_session fallback
+        res_cancel = self.client.post(manage_url, {"action": "CANCEL"}, format="json")
+        self.assertEqual(res_cancel.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_cancel.data["status"], "CANCELLED")
+
+        # 3. Midwife attempts to accept cancelled call via manage_voice_session fallback -> 409 Conflict
+        self.client.force_authenticate(user=self.midwife_user)
+        res_accept = self.client.post(manage_url, {"action": "ACCEPT"}, format="json")
+        self.assertEqual(res_accept.status_code, status.HTTP_409_CONFLICT)
+
+        # 4. Midwife attempts to decline cancelled call via manage_voice_session fallback -> 409 Conflict
+        res_decline = self.client.post(manage_url, {"action": "DECLINE"}, format="json")
+        self.assertEqual(res_decline.status_code, status.HTTP_409_CONFLICT)
+
+        # 5. Verify uid returned by fallback endpoint is numeric
+        session = VoiceSession.objects.get(consultation=consultation)
+        session.status = VoiceSession.VoiceSessionStatus.RINGING
+        session.save()
+
+        res_accept_ok = self.client.post(manage_url, {"action": "ACCEPT"}, format="json")
+        self.assertEqual(res_accept_ok.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(res_accept_ok.data["uid"], int)
+        self.assertEqual(res_accept_ok.data["uid"], AgoraService.get_numeric_uid(self.midwife_user.id))
+
     def test_unauthorized_user_cannot_access_voice_call_token(self):
         consultation = Consultation.objects.create(
             appointment=self.confirmed_appointment,

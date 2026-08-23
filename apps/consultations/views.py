@@ -177,6 +177,58 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                 session.ended_at = timezone.now()
                 session.save(update_fields=['status', 'ended_at'])
 
+    def _broadcast_call_status(self, consultation, session, user, action_type, ended_at=None):
+        """
+        Broadcasts call signaling status changes via Django Channels WebSockets to both consultation and target user channels.
+        """
+        try:
+            from channels.layers import get_channel_layer
+            from asgiref.sync import async_to_sync
+            channel_layer = get_channel_layer()
+            if not channel_layer:
+                return
+
+            action_lower = action_type.lower()
+            event_type = f"broadcast_call_{action_lower}"
+            event_name = f"call_{action_lower}"
+
+            ws_payload = {
+                'type': event_type,
+                'action': event_name,
+                'event': event_name,
+                'status': action_type,
+                'sender_id': str(user.id),
+                'consultation_id': str(consultation.id),
+            }
+            if ended_at:
+                ws_payload['ended_at'] = ended_at.isoformat() if hasattr(ended_at, 'isoformat') else ended_at
+
+            async_to_sync(channel_layer.group_send)(
+                f"consultation_call_{consultation.id}",
+                ws_payload
+            )
+
+            recipient_id = None
+            if session and session.caller and str(session.caller.id) != str(user.id):
+                recipient_id = session.caller.id
+            else:
+                if consultation.user_id != user.id:
+                    recipient_id = consultation.user_id
+                elif consultation.midwife and hasattr(consultation.midwife, 'user') and consultation.midwife.user:
+                    recipient_id = consultation.midwife.user.id
+
+            if recipient_id:
+                async_to_sync(channel_layer.group_send)(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'broadcast_user_incoming_call',
+                        'data': ws_payload
+                    }
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error broadcasting call status ({action_type}): {e}")
+
     def perform_create(self, serializer):
         appointment = serializer.validated_data['appointment']
 
@@ -244,6 +296,13 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             if recipient and str(recipient.id) == str(caller.id):
                 recipient = None
 
+            if recipient is None:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"[VOICE START] No recipient resolved for consultation {consultation.id} — "
+                    f"is_midwife={is_midwife}, midwife_user={getattr(getattr(consultation, 'midwife', None), 'user_id', None)}"
+                )
+
 
             session_key = None
             agora_channel_name = None
@@ -275,9 +334,17 @@ class ConsultationViewSet(viewsets.ModelViewSet):
 
         # FCM Call Notification (Graceful fallback if FCM token missing or push fails)
         try:
-            send_incoming_call_notification(caller=caller, recipient=recipient, consultation=consultation, call_type=call_type, session_key=session_key)
-        except Exception:
-            pass
+            send_incoming_call_notification(
+                caller=caller,
+                recipient=recipient,
+                consultation=consultation,
+                call_type=call_type,
+                session_key=session_key,
+                agora_channel_name=agora_channel_name,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"[FCM] send_incoming_call_notification failed: {e}", exc_info=True)
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         serializer = self.get_serializer(consultation)
@@ -400,33 +467,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                 consultation.started_at = timezone.now()
             consultation.save()
 
-        try:
-            from channels.layers import get_channel_layer
-            from asgiref.sync import async_to_sync
-            channel_layer = get_channel_layer()
-            if channel_layer:
-                ws_accept_payload = {
-                    'type': 'broadcast_call_accepted',
-                    'action': 'call_accepted',
-                    'event': 'call_accepted',
-                    'sender_id': str(request.user.id),
-                    'consultation_id': str(consultation.id),
-                }
-                async_to_sync(channel_layer.group_send)(
-                    f"consultation_call_{consultation.id}",
-                    ws_accept_payload
-                )
-                if session and session.caller:
-                    async_to_sync(channel_layer.group_send)(
-                        f"user_calls_{session.caller.id}",
-                        {
-                            'type': 'broadcast_user_incoming_call',
-                            'data': ws_accept_payload
-                        }
-                    )
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Error broadcasting call accepted: {e}")
+        self._broadcast_call_status(consultation, session, request.user, 'ACCEPTED')
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         token = AgoraService.generate_rtc_token(
@@ -499,24 +540,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             session.ended_at = timezone.now()
             session.save()
 
-            try:
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    ws_payload = {
-                        'type': 'broadcast_call_declined',
-                        'action': 'call_declined',
-                        'event': 'call_declined',
-                        'status': 'DECLINED',
-                        'sender_id': str(request.user.id),
-                        'consultation_id': str(consultation.id),
-                    }
-                    async_to_sync(channel_layer.group_send)(f"consultation_call_{consultation.id}", ws_payload)
-                    if session and session.caller:
-                        async_to_sync(channel_layer.group_send)(f"user_calls_{session.caller.id}", {'type': 'broadcast_user_incoming_call', 'data': ws_payload})
-            except Exception:
-                pass
+            self._broadcast_call_status(consultation, session, request.user, 'DECLINED', ended_at=session.ended_at)
 
         return Response({'status': 'DECLINED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
 
@@ -546,25 +570,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             session.ended_at = timezone.now()
             session.save()
 
-            try:
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    ws_payload = {
-                        'type': 'broadcast_call_cancelled',
-                        'action': 'call_cancelled',
-                        'event': 'call_cancelled',
-                        'status': 'CANCELLED',
-                        'sender_id': str(request.user.id),
-                        'consultation_id': str(consultation.id),
-                    }
-                    async_to_sync(channel_layer.group_send)(f"consultation_call_{consultation.id}", ws_payload)
-                    recipient_id = consultation.user_id if request.user.id != consultation.user_id else (consultation.midwife.user_id if consultation.midwife and hasattr(consultation.midwife, 'user') else None)
-                    if recipient_id:
-                        async_to_sync(channel_layer.group_send)(f"user_calls_{recipient_id}", {'type': 'broadcast_user_incoming_call', 'data': ws_payload})
-            except Exception:
-                pass
+            self._broadcast_call_status(consultation, session, request.user, 'CANCELLED', ended_at=session.ended_at)
 
         return Response({'status': 'CANCELLED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
 
@@ -610,26 +616,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             session.ended_at = timezone.now()
             session.save()
 
-            try:
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    ws_payload = {
-                        'type': 'broadcast_call_ended',
-                        'action': 'call_ended',
-                        'event': 'call_ended',
-                        'ended_at': session.ended_at.isoformat() if session.ended_at else None,
-                        'status': 'ENDED',
-                        'sender_id': str(request.user.id),
-                        'consultation_id': str(consultation.id),
-                    }
-                    async_to_sync(channel_layer.group_send)(f"consultation_call_{consultation.id}", ws_payload)
-                    recipient_id = consultation.user_id if request.user.id != consultation.user_id else (consultation.midwife.user_id if consultation.midwife and hasattr(consultation.midwife, 'user') else None)
-                    if recipient_id:
-                        async_to_sync(channel_layer.group_send)(f"user_calls_{recipient_id}", {'type': 'broadcast_user_incoming_call', 'data': ws_payload})
-            except Exception:
-                pass
+            self._broadcast_call_status(consultation, session, request.user, 'ENDED', ended_at=session.ended_at)
 
         return Response({'status': 'ENDED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
 
@@ -716,29 +703,68 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                 session.save()
                 return self.start(request, pk=pk)
             elif action_type == 'ACCEPT':
+                if session.status in [VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.ENDED]:
+                    return Response(
+                        {"error": f"Cannot accept call. Call status is '{session.status}'."},
+                        status=status.HTTP_409_CONFLICT
+                    )
                 session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
                 if not session.started_at:
                     session.started_at = timezone.now()
+                if not session.agora_channel_name:
+                    session.agora_channel_name = f"cagh_voice_{session.session_key}"
                 session.save()
+                consultation.status = Consultation.ConsultationStatus.ACTIVE
+                if not consultation.started_at:
+                    consultation.started_at = timezone.now()
+                consultation.save()
+                self._broadcast_call_status(consultation, session, request.user, 'ACCEPTED')
             elif action_type == 'CONNECT':
-                session.status = VoiceSession.VoiceSessionStatus.ONGOING
-                session.save()
+                if session.status in [VoiceSession.VoiceSessionStatus.ACCEPTED, VoiceSession.VoiceSessionStatus.RINGING]:
+                    session.status = VoiceSession.VoiceSessionStatus.ONGOING
+                    session.save(update_fields=['status'])
             elif action_type == 'DECLINE':
-                session.status = VoiceSession.VoiceSessionStatus.DECLINED
-                session.ended_at = timezone.now()
-                session.save()
+                if session.status == VoiceSession.VoiceSessionStatus.DECLINED:
+                    pass
+                elif session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
+                    return Response(
+                        {"error": f"Cannot decline call. Call status is '{session.status}'."},
+                        status=status.HTTP_409_CONFLICT
+                    )
+                else:
+                    session.status = VoiceSession.VoiceSessionStatus.DECLINED
+                    session.ended_at = timezone.now()
+                    session.save()
+                    self._broadcast_call_status(consultation, session, request.user, 'DECLINED', ended_at=session.ended_at)
             elif action_type == 'CANCEL':
-                session.status = VoiceSession.VoiceSessionStatus.CANCELLED
-                session.ended_at = timezone.now()
-                session.save()
+                if session.status == VoiceSession.VoiceSessionStatus.CANCELLED:
+                    pass
+                elif session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
+                    return Response(
+                        {"error": f"Cannot cancel call. Call status is '{session.status}'."},
+                        status=status.HTTP_409_CONFLICT
+                    )
+                else:
+                    session.status = VoiceSession.VoiceSessionStatus.CANCELLED
+                    session.ended_at = timezone.now()
+                    session.save()
+                    self._broadcast_call_status(consultation, session, request.user, 'CANCELLED', ended_at=session.ended_at)
             elif action_type == 'MISSED':
-                session.status = VoiceSession.VoiceSessionStatus.MISSED
-                session.ended_at = timezone.now()
-                session.save()
+                if session.status == VoiceSession.VoiceSessionStatus.MISSED:
+                    pass
+                else:
+                    session.status = VoiceSession.VoiceSessionStatus.MISSED
+                    session.ended_at = timezone.now()
+                    session.save()
+                    self._broadcast_call_status(consultation, session, request.user, 'MISSED', ended_at=session.ended_at)
             elif action_type == 'END':
-                session.status = VoiceSession.VoiceSessionStatus.ENDED
-                session.ended_at = timezone.now()
-                session.save()
+                if session.status in [VoiceSession.VoiceSessionStatus.ENDED, VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.FAILED]:
+                    pass
+                else:
+                    session.status = VoiceSession.VoiceSessionStatus.ENDED
+                    session.ended_at = timezone.now()
+                    session.save()
+                    self._broadcast_call_status(consultation, session, request.user, 'ENDED', ended_at=session.ended_at)
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         agora_token = AgoraService.generate_rtc_token(
@@ -751,7 +777,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         data = serializer.data
         data['agora_app_id'] = agora_app_id
         data['agora_token'] = agora_token
-        data['uid'] = request.user.id
+        data['uid'] = AgoraService.get_numeric_uid(request.user.id)
         return Response(data, status=status.HTTP_200_OK)
 
     @extend_schema(summary="Manage Virtual Video Session status", tags=["Consultations"])

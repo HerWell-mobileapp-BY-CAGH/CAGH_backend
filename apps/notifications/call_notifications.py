@@ -48,7 +48,101 @@ except Exception as e:
     logger.warning(f"[FIREBASE ADMIN] Initialization notice: {e}")
 
 
-def send_incoming_call_notification(caller, recipient, consultation, call_type="VOICE", session_key=None):
+def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
+    """
+    Sends a DATA-ONLY high-priority FCM call offer push notification to ring the recipient device.
+    Strictly data-only (no 'notification' payload block) with android.priority='high' and APNS content_available=True.
+    This guarantees background/killed app state handlers (e.g. FirebaseMessaging.onBackgroundMessage / CallKit)
+    can intercept the raw payload and launch full-screen ringing UI.
+    """
+    if not recipient or (hasattr(recipient, 'id') and recipient.id == caller.id):
+        logger.info(f"[CALL OFFER PUSH SKIPPED] Recipient missing or caller==recipient.")
+        return None
+
+    caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
+    channel_name = agora_channel_name or (f"cagh_{call_type.lower()}_{session_key}" if session_key else f"cagh_consultation_{consultation.id}")
+    app_id = agora_app_id or getattr(settings, 'AGORA_APP_ID', '')
+
+    recipient_name = getattr(recipient, 'get_full_name', lambda: '')() or getattr(recipient, 'username', '') or ""
+    import time
+    call_payload = {
+        "type": "incoming_call",
+        "action": "INCOMING_CALL",
+        "consultation_id": str(consultation.id),
+        "call_id": session_key or str(consultation.id),
+        "session_id": session_key or "",
+        "session_key": session_key or "",
+        "call_type": str(call_type),
+        "channel_name": channel_name,
+        "agora_channel_name": channel_name,
+        "agora_app_id": str(app_id),
+        "caller_id": str(caller.id),
+        "caller_name": caller_name,
+        "caller_role": str(getattr(caller, 'role', 'PATIENT')),
+        "receiver_id": str(recipient.id),
+        "recipient_id": str(recipient.id),
+        "receiver_name": recipient_name,
+        "recipient_name": recipient_name,
+        "timestamp": str(int(time.time())),
+    }
+
+    tokens = list(
+        DeviceToken.objects.filter(user=recipient, is_active=True).values_list('token', flat=True)
+    )
+
+    if not tokens:
+        logger.info(f"[CALL OFFER PUSH] No active FCM device token registered for {recipient.username}.")
+        return None
+
+    logger.info(f"[CALL OFFER PUSH] Dispatching DATA-ONLY high-priority FCM offer to {recipient.username} ({len(tokens)} tokens). Payload: {call_payload}")
+
+    if _firebase_initialized:
+        try:
+            from firebase_admin import messaging
+            str_payload = {k: str(v) for k, v in call_payload.items()}
+            message = messaging.MulticastMessage(
+                tokens=tokens,
+                data=str_payload,  # DATA-ONLY: No notification= block!
+                android=messaging.AndroidConfig(
+                    priority='high',
+                    ttl=30,
+                ),
+                apns=messaging.APNSConfig(
+                    headers={
+                        'apns-priority': '10',
+                        'apns-push-type': 'background',
+                    },
+                    payload=messaging.APNSPayload(
+                        aps=messaging.Aps(
+                            content_available=True,
+                        ),
+                    ),
+                ),
+            )
+            if hasattr(messaging, 'send_each_for_multicast'):
+                response = messaging.send_each_for_multicast(message)
+            else:
+                response = messaging.send_multicast(message)
+            logger.info(f"[CALL OFFER PUSH SUCCESS] Sent to {recipient.username}. Success: {response.success_count}, Failure: {response.failure_count}")
+
+            if response.failure_count > 0:
+                for idx, resp in enumerate(response.responses):
+                    if not resp.success and resp.exception:
+                        err_code = str(resp.exception)
+                        if 'Unregistered' in err_code or 'InvalidArgument' in err_code:
+                            stale_token = tokens[idx]
+                            DeviceToken.objects.filter(token=stale_token).update(is_active=False)
+                            logger.info(f"[FCM TOKEN DEACTIVATED] Stale token deactivated: {stale_token[:15]}...")
+
+            return response
+        except Exception as fe:
+            logger.error(f"[CALL OFFER PUSH ERROR] Failed sending data-only FCM push via Firebase Admin: {fe}")
+            return None
+
+    return None
+
+
+def send_incoming_call_notification(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
     """
     Triggers an in-app Notification and high-priority FCM call push notification to ring the recipient device.
     Strictly prevents self-calling (caller == recipient).
@@ -72,62 +166,15 @@ def send_incoming_call_notification(caller, recipient, consultation, call_type="
         reference_id=str(consultation.id),
     )
 
-    # 2. Retrieve active FCM device tokens for recipient
-    tokens = list(
-        DeviceToken.objects.filter(user=recipient, is_active=True).values_list('token', flat=True)
+    # 2. Trigger DATA-ONLY FCM Call Offer Push
+    send_call_offer_push(
+        caller=caller,
+        recipient=recipient,
+        consultation=consultation,
+        call_type=call_type,
+        session_key=session_key,
+        agora_channel_name=agora_channel_name,
+        agora_app_id=agora_app_id,
     )
-
-    channel_name = f"cagh_{call_type.lower()}_{session_key}" if session_key else f"cagh_consultation_{consultation.id}"
-
-    call_payload = {
-        "type": "incoming_call",
-        "action": "INCOMING_CALL",
-        "notification_id": str(notification.id),
-        "consultation_id": str(consultation.id),
-        "call_id": session_key or str(consultation.id),
-        "session_id": session_key or "",
-        "session_key": session_key or "",
-        "call_type": call_type,
-        "caller_id": str(caller.id),
-        "caller_name": caller_name,
-        "caller_role": getattr(caller, 'role', 'PATIENT'),
-        "channel_name": channel_name,
-    }
-
-    # 3. Dispatch FCM push notification via Firebase Admin SDK
-    if tokens:
-        logger.info(f"[FCM CALL PUSH] Dispatched incoming {call_type} call ringing alert to user {recipient.username} ({len(tokens)} device tokens). Payload: {call_payload}")
-        if _firebase_initialized:
-            try:
-                from firebase_admin import messaging
-                str_payload = {k: str(v) for k, v in call_payload.items()}
-                message = messaging.MulticastMessage(
-                    tokens=tokens,
-                    data=str_payload,
-                    android=messaging.AndroidConfig(
-                        priority='high',
-                        ttl=30,
-                        notification=messaging.AndroidNotification(
-                            title=title,
-                            body=body,
-                            sound='default',
-                            channel_id='incoming_calls',
-                        ),
-                    ),
-                    apns=messaging.APNSConfig(
-                        payload=messaging.APNSPayload(
-                            aps=messaging.Aps(
-                                sound='default',
-                                content_available=True,
-                            ),
-                        ),
-                    ),
-                )
-                response = messaging.send_multicast(message)
-                logger.info(f"[FCM CALL PUSH SUCCESS] Sent to {recipient.username}. Success: {response.success_count}, Failure: {response.failure_count}")
-            except Exception as fe:
-                logger.error(f"[FCM CALL PUSH ERROR] Failed sending FCM push via Firebase Admin: {fe}")
-    else:
-        logger.info(f"[IN-APP CALL NOTIFICATION] Dispatched call alert for user {recipient.username} (No active FCM token registered yet). Payload: {call_payload}")
 
     return notification
