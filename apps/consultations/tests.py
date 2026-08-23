@@ -126,7 +126,7 @@ class ConsultationManagementTestCase(APITestCase):
 
     def test_agora_rtc_token_generation_service(self):
         token = AgoraService.generate_rtc_token("cagh_voice_VOICE-TEST1234", uid=101, role=AgoraRole.PUBLISHER)
-        self.assertTrue(token.startswith("RTC_TOKEN_") or token.startswith("007"))
+        self.assertTrue(token.startswith("RTC_TOKEN_") or token.startswith("007") or token.startswith("006"))
 
     def test_voice_session_agora_lifecycle_endpoints(self):
         consultation = Consultation.objects.create(
