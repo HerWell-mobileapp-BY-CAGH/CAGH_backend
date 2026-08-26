@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from django.conf import settings
 from .models import Notification, DeviceToken
@@ -12,13 +13,24 @@ try:
     from firebase_admin import credentials, messaging
     
     if not firebase_admin._apps:
+        cred = None
         cred_path = getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None) or os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY', '')
-        if cred_path and os.path.exists(cred_path):
+        if cred_path and cred_path.strip().startswith('{'):
+            # Env var holds the raw JSON service-account content (common on PaaS like Render).
+            try:
+                cred = credentials.Certificate(json.loads(cred_path))
+                firebase_admin.initialize_app(cred)
+                _firebase_initialized = True
+                logger.info("[FIREBASE ADMIN] Initialized with JSON string from FIREBASE_SERVICE_ACCOUNT_KEY.")
+            except Exception as je:
+                logger.warning(f"[FIREBASE ADMIN] FIREBASE_SERVICE_ACCOUNT_KEY looks like JSON but failed to parse: {je}")
+        elif cred_path and os.path.exists(cred_path):
             cred = credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred)
             _firebase_initialized = True
             logger.info(f"[FIREBASE ADMIN] Initialized with key file: {cred_path}")
-        else:
+
+        if not _firebase_initialized:
             # Check for service-account.json in backend root or config folder
             backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             candidate_paths = [
