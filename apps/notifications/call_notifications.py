@@ -6,60 +6,88 @@ from .models import Notification, DeviceToken
 
 logger = logging.getLogger(__name__)
 
-# Firebase Admin SDK Initialization
+# Robust Firebase Admin SDK Initialization
 _firebase_initialized = False
-try:
-    import firebase_admin
-    from firebase_admin import credentials, messaging
-    
-    if not firebase_admin._apps:
-        cred = None
+
+def init_firebase_admin():
+    global _firebase_initialized
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, messaging
+
+        if firebase_admin._apps and '[DEFAULT]' in firebase_admin._apps:
+            app = firebase_admin.get_app()
+            if getattr(app, 'project_id', None):
+                _firebase_initialized = True
+                return app
+            try:
+                firebase_admin.delete_app(app)
+            except Exception:
+                pass
+
+        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidate_paths = [
+            os.path.join(backend_root, 'firebase-service-account.json'),
+            os.path.join(backend_root, 'service-account.json'),
+            os.path.join(backend_root, 'config', 'firebase-service-account.json'),
+            r'C:\Users\hp\Desktop\CAGH_backend\firebase-service-account.json',
+        ]
+
         cred_path = getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None) or os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY', '')
         if cred_path and cred_path.strip().startswith('{'):
-            # Env var holds the raw JSON service-account content (common on PaaS like Render).
             try:
-                cred = credentials.Certificate(json.loads(cred_path))
-                firebase_admin.initialize_app(cred)
+                data = json.loads(cred_path)
+                pid = data.get('project_id', 'cagh-bd916')
+                cred = credentials.Certificate(data)
+                app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                 _firebase_initialized = True
-                logger.info("[FIREBASE ADMIN] Initialized with JSON string from FIREBASE_SERVICE_ACCOUNT_KEY.")
+                logger.info(f"[FIREBASE ADMIN] Initialized from FIREBASE_SERVICE_ACCOUNT_KEY JSON string (project_id={pid}).")
+                return app
             except Exception as je:
-                logger.warning(f"[FIREBASE ADMIN] FIREBASE_SERVICE_ACCOUNT_KEY looks like JSON but failed to parse: {je}")
+                logger.warning(f"[FIREBASE ADMIN] Failed parsing JSON string creds: {je}")
         elif cred_path and os.path.exists(cred_path):
-            cred = credentials.Certificate(cred_path)
-            firebase_admin.initialize_app(cred)
-            _firebase_initialized = True
-            logger.info(f"[FIREBASE ADMIN] Initialized with key file: {cred_path}")
-
-        if not _firebase_initialized:
-            # Check for service-account.json in backend root or config folder
-            backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            candidate_paths = [
-                os.path.join(backend_root, 'firebase-service-account.json'),
-                os.path.join(backend_root, 'service-account.json'),
-                os.path.join(backend_root, 'config', 'firebase-service-account.json'),
-            ]
-            found = False
-            for p in candidate_paths:
-                if os.path.exists(p):
-                    cred = credentials.Certificate(p)
-                    firebase_admin.initialize_app(cred)
-                    _firebase_initialized = True
-                    found = True
-                    logger.info(f"[FIREBASE ADMIN] Initialized with candidate key file: {p}")
-                    break
-            if not found:
+            try:
+                cred = credentials.Certificate(cred_path)
+                pid = 'cagh-bd916'
                 try:
-                    firebase_admin.initialize_app()
+                    with open(cred_path, 'r', encoding='utf-8') as f:
+                        pid = json.load(f).get('project_id', pid)
+                except Exception:
+                    pass
+                app = firebase_admin.initialize_app(cred, options={'projectId': pid})
+                _firebase_initialized = True
+                logger.info(f"[FIREBASE ADMIN] Initialized with key file {cred_path} (project_id={pid}).")
+                return app
+            except Exception as fe:
+                logger.warning(f"[FIREBASE ADMIN] Failed loading key file {cred_path}: {fe}")
+
+        for p in candidate_paths:
+            if os.path.exists(p):
+                try:
+                    pid = 'cagh-bd916'
+                    try:
+                        with open(p, 'r', encoding='utf-8') as f:
+                            pid = json.load(f).get('project_id', pid)
+                    except Exception:
+                        pass
+                    cred = credentials.Certificate(p)
+                    app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                     _firebase_initialized = True
-                    logger.info("[FIREBASE ADMIN] Initialized with default application credentials.")
-                except Exception as fe:
-                    logger.warning(f"[FIREBASE ADMIN] Key file not found yet. Place firebase-service-account.json in CAGH_backend root directory.")
-    else:
+                    logger.info(f"[FIREBASE ADMIN] Initialized with candidate key file: {p} (project_id={pid})")
+                    return app
+                except Exception as pe:
+                    logger.warning(f"[FIREBASE ADMIN] Error loading {p}: {pe}")
+
+        pid = os.getenv('GOOGLE_CLOUD_PROJECT', 'cagh-bd916')
+        app = firebase_admin.initialize_app(options={'projectId': pid})
         _firebase_initialized = True
-except Exception as e:
-    logger.warning(f"[FIREBASE ADMIN] Initialization notice: {e}")
+        logger.info(f"[FIREBASE ADMIN] Initialized with default options (project_id={pid})")
+        return app
+    except Exception as e:
+        logger.warning(f"[FIREBASE ADMIN] Initialization exception: {e}")
+        return None
 
-
+init_firebase_admin()
 def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
     """
     Sends a DATA-ONLY high-priority FCM call offer push notification to ring the recipient device.
