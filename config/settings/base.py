@@ -376,3 +376,7 @@ AGORA_APP_CERTIFICATE = os.environ.get('AGORA_APP_CERTIFICATE', '')
 
 
 
+
+# Firebase Cloud Messaging & Admin SDK Configuration
+FIREBASE_SERVICE_ACCOUNT_KEY = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY', os.path.join(BASE_DIR, 'firebase-service-account.json'))
+GOOGLE_CLOUD_PROJECT = os.environ.get('GOOGLE_CLOUD_PROJECT', 'cagh-bd916')

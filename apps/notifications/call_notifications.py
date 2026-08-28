@@ -159,10 +159,11 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
                     ),
                 ),
             )
+            fb_app = init_firebase_admin()
             if hasattr(messaging, 'send_each_for_multicast'):
-                response = messaging.send_each_for_multicast(message)
+                response = messaging.send_each_for_multicast(message, app=fb_app) if fb_app else messaging.send_each_for_multicast(message)
             else:
-                response = messaging.send_multicast(message)
+                response = messaging.send_multicast(message, app=fb_app) if fb_app else messaging.send_multicast(message)
             logger.info(f"[CALL OFFER PUSH SUCCESS] Sent to {recipient.username}. Success: {response.success_count}, Failure: {response.failure_count}")
 
             if response.failure_count > 0:
