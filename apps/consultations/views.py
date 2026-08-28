@@ -89,6 +89,10 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = Consultation.objects.all().select_related('appointment', 'user', 'midwife', 'midwife__user').prefetch_related('notes')
 
+        appointment_id = self.request.query_params.get('appointment') or self.request.query_params.get('appointment_id')
+        if appointment_id:
+            queryset = queryset.filter(appointment_id=appointment_id)
+
         if self.action in [
             'retrieve', 'add_note', 'start', 'complete', 'manage_voice_session', 'manage_video_session',
             'destroy', 'voice_session_accept', 'voice_session_connect', 'voice_session_decline',
@@ -103,6 +107,15 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             return queryset.filter(models.Q(user=user) | models.Q(midwife=user.midwife_profile))
 
         return queryset.filter(user=user)
+
+    def create(self, request, *args, **kwargs):
+        appointment_id = request.data.get('appointment')
+        if appointment_id:
+            existing = Consultation.objects.filter(appointment_id=appointment_id).first()
+            if existing:
+                serializer = self.get_serializer(existing)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+        return super().create(request, *args, **kwargs)
 
     def get_object(self):
         pk = self.kwargs.get('pk')

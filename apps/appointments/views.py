@@ -341,6 +341,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment.status = Appointment.AppointmentStatus.CONFIRMED
         appointment.save()
 
+        from apps.consultations.models import Consultation
+        Consultation.objects.get_or_create(
+            appointment=appointment,
+            defaults={
+                'user': appointment.user,
+                'midwife': appointment.midwife,
+                'consultation_type': appointment.appointment_type,
+                'status': Consultation.ConsultationStatus.SCHEDULED,
+            }
+        )
+
         _notify_user_and_midwife(
             appointment,
             title="Appointment Confirmed",
