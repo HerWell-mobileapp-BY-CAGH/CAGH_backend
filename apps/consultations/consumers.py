@@ -118,17 +118,36 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             )
 
         # 3. Call Declined
-        elif action_type in ['call_declined', 'decline']:
+        elif action_type in ['call_declined', 'decline', 'decline_call', 'call_decline']:
             call_type = data.get('call_type', 'VOICE')
+            logger.info(f"[BACKEND RECEIVED] Call decline received for consultation {self.consultation_id} from user {user.id}")
             await self.update_call_status(self.consultation_id, call_type, 'DECLINED')
 
+            logger.info(f"[DECLINE BROADCAST] Dispatching broadcast_call_declined to group {self.group_name}")
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     'type': 'broadcast_call_declined',
                     'sender_id': str(user.id),
+                    'consultation_id': self.consultation_id,
                 }
             )
+
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            if recipient_id:
+                logger.info(f"[DECLINE BROADCAST] Dispatching call_declined to recipient user_calls_{recipient_id}")
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'broadcast_user_incoming_call',
+                        'data': {
+                            'type': 'call_declined',
+                            'action': 'call_declined',
+                            'consultation_id': self.consultation_id,
+                            'sender_id': str(user.id),
+                        }
+                    }
+                )
 
         # 4. Call Cancelled
         elif action_type in ['call_cancelled', 'cancel']:
@@ -216,6 +235,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             'type': 'call_declined',
             'action': 'call_declined',
             'sender_id': event['sender_id'],
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
         }))
 
     async def broadcast_call_cancelled(self, event):
