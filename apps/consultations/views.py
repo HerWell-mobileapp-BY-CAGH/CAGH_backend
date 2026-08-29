@@ -322,24 +322,8 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             call_type = "VOICE"
 
             # Handle both VIRTUAL_VOICE and VIRTUAL_VIDEO consultations seamlessly
-            active_session = VoiceSession.objects.select_for_update().filter(
-                consultation=consultation
-            ).exclude(
-                status__in=[
-                    VoiceSession.VoiceSessionStatus.CANCELLED,
-                    VoiceSession.VoiceSessionStatus.DECLINED,
-                    VoiceSession.VoiceSessionStatus.MISSED,
-                    VoiceSession.VoiceSessionStatus.ENDED,
-                    VoiceSession.VoiceSessionStatus.FAILED,
-                ]
-            ).first()
-
-            if active_session:
-                session = active_session
-                session_key = session.session_key
-                agora_channel_name = session.agora_channel_name
-                is_new_call_attempt = False
-            else:
+            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            if not session:
                 session_key = f"VOICE-{uuid.uuid4().hex[:12].upper()}"
                 session = VoiceSession.objects.create(
                     consultation=consultation,
@@ -348,27 +332,32 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                     status=VoiceSession.VoiceSessionStatus.RINGING,
                     caller=caller,
                 )
-                agora_channel_name = session.agora_channel_name
-                is_new_call_attempt = True
+            else:
+                session.status = VoiceSession.VoiceSessionStatus.RINGING
+                session.caller = caller
+                session.started_at = None
+                session.ended_at = None
+                if not session.agora_channel_name:
+                    session.agora_channel_name = f"cagh_voice_{session.session_key}"
+                session.save()
 
             session_key = session.session_key
             agora_channel_name = session.agora_channel_name
             call_type = "VOICE"
 
-        # FCM Call Notification (Dispatched ONLY ONCE per new call attempt)
-        if is_new_call_attempt:
-            try:
-                send_incoming_call_notification(
-                    caller=caller,
-                    recipient=recipient,
-                    consultation=consultation,
-                    call_type=call_type,
-                    session_key=session_key,
-                    agora_channel_name=agora_channel_name,
-                )
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"[FCM] send_incoming_call_notification failed: {e}", exc_info=True)
+        # FCM Call Notification (Graceful fallback if FCM token missing or push fails)
+        try:
+            send_incoming_call_notification(
+                caller=caller,
+                recipient=recipient,
+                consultation=consultation,
+                call_type=call_type,
+                session_key=session_key,
+                agora_channel_name=agora_channel_name,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"[FCM] send_incoming_call_notification failed: {e}", exc_info=True)
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         serializer = self.get_serializer(consultation)
