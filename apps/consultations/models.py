@@ -49,6 +49,10 @@ class Consultation(models.Model):
         return f"Consultation {self.id} - {self.user.username} & Midwife {self.midwife.user.username}"
 
 
+    @property
+    def voice_session(self):
+        return self.voice_sessions.first()
+
 class ConsultationNote(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     consultation = models.ForeignKey(Consultation, on_delete=models.CASCADE, related_name='notes')
@@ -77,7 +81,7 @@ class VoiceSession(models.Model):
         FAILED = 'FAILED', _('Failed')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    consultation = models.OneToOneField(Consultation, on_delete=models.CASCADE, related_name='voice_session')
+    consultation = models.ForeignKey(Consultation, on_delete=models.CASCADE, related_name='voice_sessions')
     caller = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
