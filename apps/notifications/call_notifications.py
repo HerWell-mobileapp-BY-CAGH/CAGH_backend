@@ -83,6 +83,17 @@ def init_firebase_admin():
                 except Exception as pe:
                     logger.warning(f'[FIREBASE ADMIN] Error loading candidate key file {p}: {pe}')
 
+        # 4. Try Application Default Credentials (ADC) or default projectId (Render / GCP env)
+        try:
+            cred = credentials.ApplicationDefault()
+            pid = os.getenv('FIREBASE_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT') or 'cagh-bd916'
+            app = firebase_admin.initialize_app(cred, options={'projectId': pid})
+            _firebase_initialized = True
+            logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized with Application Default Credentials (project_id={pid}).')
+            return app
+        except Exception as adce:
+            logger.debug(f'[FIREBASE ADMIN] ADC initialization attempt skipped: {adce}')
+
         _firebase_initialized = False
         logger.error('[FIREBASE ADMIN ERROR] Firebase Admin credentials unavailable. FCM pushes cannot be dispatched. Please set FIREBASE_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS.')
         return None
