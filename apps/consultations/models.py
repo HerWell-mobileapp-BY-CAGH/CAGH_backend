@@ -51,7 +51,18 @@ class Consultation(models.Model):
 
     @property
     def voice_session(self):
-        return self.voice_sessions.first()
+        active = self.voice_sessions.exclude(
+            status__in=[
+                VoiceSession.VoiceSessionStatus.CANCELLED,
+                VoiceSession.VoiceSessionStatus.DECLINED,
+                VoiceSession.VoiceSessionStatus.MISSED,
+                VoiceSession.VoiceSessionStatus.ENDED,
+                VoiceSession.VoiceSessionStatus.FAILED,
+            ]
+        ).order_by('-created_at').first()
+        if active:
+            return active
+        return self.voice_sessions.order_by('-created_at').first()
 
 class ConsultationNote(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)

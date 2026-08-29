@@ -445,6 +445,26 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             'consultation': serializer.data,
         }, status=status.HTTP_200_OK)
 
+    def _get_voice_session(self, consultation, select_for_update=False):
+        qs = VoiceSession.objects.filter(consultation=consultation)
+        if select_for_update:
+            qs = qs.select_for_update()
+
+        active = qs.exclude(
+            status__in=[
+                VoiceSession.VoiceSessionStatus.CANCELLED,
+                VoiceSession.VoiceSessionStatus.DECLINED,
+                VoiceSession.VoiceSessionStatus.MISSED,
+                VoiceSession.VoiceSessionStatus.ENDED,
+                VoiceSession.VoiceSessionStatus.FAILED,
+            ]
+        ).order_by('-created_at').first()
+
+        if active:
+            return active
+
+        return qs.order_by('-created_at').first()
+
     @extend_schema(
         summary="Start consultation call ringing (Voice Session Alias)",
         tags=["Consultations"],
@@ -465,7 +485,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
 
-            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            session = self._get_voice_session(consultation, select_for_update=True)
             if not session:
                 return Response({"error": "No voice session found to accept."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -528,7 +548,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_connect(self, request, pk=None):
         with transaction.atomic():
             consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            session = self._get_voice_session(consultation, select_for_update=True)
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -547,7 +567,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_decline(self, request, pk=None):
         with transaction.atomic():
             consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            session = self._get_voice_session(consultation, select_for_update=True)
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -577,7 +597,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_cancel(self, request, pk=None):
         with transaction.atomic():
             consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            session = self._get_voice_session(consultation, select_for_update=True)
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -607,7 +627,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_missed(self, request, pk=None):
         with transaction.atomic():
             consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            session = self._get_voice_session(consultation, select_for_update=True)
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -629,7 +649,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_end(self, request, pk=None):
         with transaction.atomic():
             consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            session = self._get_voice_session(consultation, select_for_update=True)
             if not session:
                 return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -654,10 +674,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_token(self, request, pk=None):
         consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
 
-        if not hasattr(consultation, 'voice_session'):
+        session = self._get_voice_session(consultation, select_for_update=False)
+        if not session:
             return Response({'error': 'No voice session found for this consultation.'}, status=status.HTTP_404_NOT_FOUND)
-
-        session = consultation.voice_session
         self._check_and_auto_expire_ringing_session(session)
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
@@ -708,7 +727,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         action_type = request.data.get('action', 'STATUS') if request.method == 'POST' else 'STATUS'
 
         with transaction.atomic():
-            session = VoiceSession.objects.select_for_update().filter(consultation=consultation).first()
+            session = self._get_voice_session(consultation, select_for_update=True)
             if not session:
                 session_key = f"VOICE-{uuid.uuid4().hex[:12].upper()}"
                 session = VoiceSession.objects.create(
