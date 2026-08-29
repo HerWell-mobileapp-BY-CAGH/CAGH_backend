@@ -30,37 +30,42 @@ def init_firebase_admin():
             os.path.join(backend_root, 'firebase-service-account.json'),
             os.path.join(backend_root, 'service-account.json'),
             os.path.join(backend_root, 'config', 'firebase-service-account.json'),
-            r'C:\Users\hp\Desktop\CAGH_backend\firebase-service-account.json',
+            os.path.join(r'C:\Users\hp\Desktop\CAGH_backend', 'firebase-service-account.json'),
         ]
 
-        cred_path = getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None) or os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY', '')
-        if cred_path and cred_path.strip().startswith('{'):
+        # 1. Environment variable containing JSON string
+        env_raw = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY') or os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON') or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None)
+        if env_raw and str(env_raw).strip().startswith('{'):
             try:
-                data = json.loads(cred_path)
+                data = json.loads(env_raw)
                 pid = data.get('project_id', 'cagh-bd916')
                 cred = credentials.Certificate(data)
                 app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                 _firebase_initialized = True
-                logger.info(f"[FIREBASE ADMIN] Initialized from FIREBASE_SERVICE_ACCOUNT_KEY JSON string (project_id={pid}).")
+                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized successfully from JSON env var (project_id={pid}).')
                 return app
             except Exception as je:
-                logger.warning(f"[FIREBASE ADMIN] Failed parsing JSON string creds: {je}")
-        elif cred_path and os.path.exists(cred_path):
+                logger.warning(f'[FIREBASE ADMIN] Failed parsing JSON env var creds: {je}')
+
+        # 2. GOOGLE_APPLICATION_CREDENTIALS or file path
+        gac_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS') or (env_raw if env_raw and os.path.exists(str(env_raw)) else None)
+        if gac_path and os.path.exists(gac_path):
             try:
-                cred = credentials.Certificate(cred_path)
+                cred = credentials.Certificate(gac_path)
                 pid = 'cagh-bd916'
                 try:
-                    with open(cred_path, 'r', encoding='utf-8') as f:
+                    with open(gac_path, 'r', encoding='utf-8') as f:
                         pid = json.load(f).get('project_id', pid)
                 except Exception:
                     pass
                 app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                 _firebase_initialized = True
-                logger.info(f"[FIREBASE ADMIN] Initialized with key file {cred_path} (project_id={pid}).")
+                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized successfully with key file {gac_path} (project_id={pid}).')
                 return app
             except Exception as fe:
-                logger.warning(f"[FIREBASE ADMIN] Failed loading key file {cred_path}: {fe}")
+                logger.warning(f'[FIREBASE ADMIN] Failed loading key file {gac_path}: {fe}')
 
+        # 3. Local candidate key file paths
         for p in candidate_paths:
             if os.path.exists(p):
                 try:
@@ -73,18 +78,17 @@ def init_firebase_admin():
                     cred = credentials.Certificate(p)
                     app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                     _firebase_initialized = True
-                    logger.info(f"[FIREBASE ADMIN] Initialized with candidate key file: {p} (project_id={pid})")
+                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized successfully with candidate key file: {p} (project_id={pid}).')
                     return app
                 except Exception as pe:
-                    logger.warning(f"[FIREBASE ADMIN] Error loading {p}: {pe}")
+                    logger.warning(f'[FIREBASE ADMIN] Error loading candidate key file {p}: {pe}')
 
-        pid = os.getenv('GOOGLE_CLOUD_PROJECT', 'cagh-bd916')
-        app = firebase_admin.initialize_app(options={'projectId': pid})
-        _firebase_initialized = True
-        logger.info(f"[FIREBASE ADMIN] Initialized with default options (project_id={pid})")
-        return app
+        _firebase_initialized = False
+        logger.error('[FIREBASE ADMIN ERROR] Firebase Admin credentials unavailable. FCM pushes cannot be dispatched. Please set FIREBASE_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS.')
+        return None
     except Exception as e:
-        logger.warning(f"[FIREBASE ADMIN] Initialization exception: {e}")
+        _firebase_initialized = False
+        logger.error(f'[FIREBASE ADMIN ERROR] Initialization exception: {e}')
         return None
 
 init_firebase_admin()
