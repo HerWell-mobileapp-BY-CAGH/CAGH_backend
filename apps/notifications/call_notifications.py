@@ -1,6 +1,8 @@
 import os
 import json
+import base64
 import logging
+import time
 from django.conf import settings
 from .models import Notification, DeviceToken
 
@@ -9,7 +11,20 @@ logger = logging.getLogger(__name__)
 # Robust Firebase Admin SDK Initialization
 _firebase_initialized = False
 
+
 def init_firebase_admin():
+    """
+    Initializes Firebase Admin SDK using service account credentials.
+    Supports:
+    1. FIREBASE_SERVICE_ACCOUNT_KEY env var / Django setting as raw JSON string.
+    2. FIREBASE_SERVICE_ACCOUNT_KEY as Base64-encoded JSON string.
+    3. GOOGLE_APPLICATION_CREDENTIALS or file path to JSON credential file.
+    4. Local candidate service-account JSON file paths.
+
+    Explicitly DOES NOT fall back silently to Application Default Credentials (ADC)
+    unless explicitly enabled via FIREBASE_USE_ADC environment variable, preventing
+    runtime OAuth failure errors on non-GCP environments like Render.
+    """
     global _firebase_initialized
     try:
         import firebase_admin
@@ -25,30 +40,49 @@ def init_firebase_admin():
             except Exception:
                 pass
 
-        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        candidate_paths = [
-            os.path.join(backend_root, 'firebase-service-account.json'),
-            os.path.join(backend_root, 'service-account.json'),
-            os.path.join(backend_root, 'config', 'firebase-service-account.json'),
-            os.path.join(r'C:\Users\hp\Desktop\CAGH_backend', 'firebase-service-account.json'),
-        ]
-
-        # 1. Environment variable containing JSON string
         env_raw = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY') or os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON') or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None)
-        if env_raw and str(env_raw).strip().startswith('{'):
-            try:
-                data = json.loads(env_raw)
-                pid = data.get('project_id', 'cagh-bd916')
-                cred = credentials.Certificate(data)
-                app = firebase_admin.initialize_app(cred, options={'projectId': pid})
-                _firebase_initialized = True
-                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized successfully from JSON env var (project_id={pid}).')
-                return app
-            except Exception as je:
-                logger.warning(f'[FIREBASE ADMIN] Failed parsing JSON env var creds: {je}')
 
-        # 2. GOOGLE_APPLICATION_CREDENTIALS or file path
-        gac_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS') or (env_raw if env_raw and os.path.exists(str(env_raw)) else None)
+        # 1. Direct JSON string or Base64 encoded JSON string
+        if env_raw:
+            env_str = str(env_raw).strip()
+            # Try raw JSON
+            if env_str.startswith('{'):
+                try:
+                    data = json.loads(env_str)
+                    pid = data.get('project_id', 'cagh-bd916')
+                    cred = credentials.Certificate(data)
+                    app = firebase_admin.initialize_app(cred, options={'projectId': pid})
+                    _firebase_initialized = True
+                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from raw JSON env var (project_id={pid}).')
+                    return app
+                except Exception as je:
+                    logger.warning(f'[FIREBASE ADMIN] Failed parsing raw JSON env var: {je}')
+
+            # Try Base64 encoded JSON
+            try:
+                decoded_bytes = base64.b64decode(env_str)
+                decoded_str = decoded_bytes.decode('utf-8').strip()
+                if decoded_str.startswith('{'):
+                    data = json.loads(decoded_str)
+                    pid = data.get('project_id', 'cagh-bd916')
+                    cred = credentials.Certificate(data)
+                    app = firebase_admin.initialize_app(cred, options={'projectId': pid})
+                    _firebase_initialized = True
+                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from Base64 JSON env var (project_id={pid}).')
+                    return app
+            except Exception:
+                pass
+
+        # 2. File path from GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_SERVICE_ACCOUNT_KEY
+        gac_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+        if not gac_path and env_raw:
+            candidate_path = str(env_raw).strip()
+            try:
+                if os.path.exists(candidate_path):
+                    gac_path = candidate_path
+            except Exception:
+                pass
+
         if gac_path and os.path.exists(gac_path):
             try:
                 cred = credentials.Certificate(gac_path)
@@ -60,15 +94,22 @@ def init_firebase_admin():
                     pass
                 app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                 _firebase_initialized = True
-                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized successfully with key file {gac_path} (project_id={pid}).')
+                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from key file {gac_path} (project_id={pid}).')
                 return app
             except Exception as fe:
                 logger.warning(f'[FIREBASE ADMIN] Failed loading key file {gac_path}: {fe}')
 
         # 3. Local candidate key file paths
+        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidate_paths = [
+            os.path.join(backend_root, 'firebase-service-account.json'),
+            os.path.join(backend_root, 'service-account.json'),
+            os.path.join(backend_root, 'config', 'firebase-service-account.json'),
+        ]
+
         for p in candidate_paths:
-            if os.path.exists(p):
-                try:
+            try:
+                if os.path.exists(p):
                     pid = 'cagh-bd916'
                     try:
                         with open(p, 'r', encoding='utf-8') as f:
@@ -78,64 +119,70 @@ def init_firebase_admin():
                     cred = credentials.Certificate(p)
                     app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                     _firebase_initialized = True
-                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized successfully with candidate key file: {p} (project_id={pid}).')
+                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from candidate file: {p} (project_id={pid}).')
                     return app
-                except Exception as pe:
-                    logger.warning(f'[FIREBASE ADMIN] Error loading candidate key file {p}: {pe}')
+            except Exception as pe:
+                logger.warning(f'[FIREBASE ADMIN] Error loading candidate key file {p}: {pe}')
 
-        # 4. Try Application Default Credentials (ADC) or default projectId (Render / GCP env)
-        try:
-            cred = credentials.ApplicationDefault()
-            pid = os.getenv('FIREBASE_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT') or 'cagh-bd916'
-            app = firebase_admin.initialize_app(cred, options={'projectId': pid})
-            _firebase_initialized = True
-            logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized with Application Default Credentials (project_id={pid}).')
-            return app
-        except Exception as adce:
-            logger.debug(f'[FIREBASE ADMIN] ADC initialization attempt skipped: {adce}')
+        # 4. ADC (Only if explicitly enabled via FIREBASE_USE_ADC env var)
+        if os.getenv('FIREBASE_USE_ADC', '').lower() == 'true':
+            try:
+                cred = credentials.ApplicationDefault()
+                pid = os.getenv('FIREBASE_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT') or 'cagh-bd916'
+                app = firebase_admin.initialize_app(cred, options={'projectId': pid})
+                _firebase_initialized = True
+                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized with Application Default Credentials (project_id={pid}).')
+                return app
+            except Exception as adce:
+                logger.warning(f'[FIREBASE ADMIN] ADC initialization failed: {adce}')
 
         _firebase_initialized = False
-        logger.error('[FIREBASE ADMIN ERROR] Firebase Admin credentials unavailable. FCM pushes cannot be dispatched. Please set FIREBASE_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS.')
+        logger.error('[FIREBASE ADMIN ERROR] Firebase credentials unavailable. FCM push delivery disabled. Please set FIREBASE_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS.')
         return None
     except Exception as e:
         _firebase_initialized = False
-        logger.error(f'[FIREBASE ADMIN ERROR] Initialization exception: {e}')
+        logger.error(f'[FIREBASE ADMIN ERROR] Firebase initialization exception: {e}')
         return None
 
+
 init_firebase_admin()
+
+
 def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
     """
     Sends a DATA-ONLY high-priority FCM call offer push notification to ring the recipient device.
     Strictly data-only (no 'notification' payload block) with android.priority='high' and APNS content_available=True.
-    This guarantees background/killed app state handlers (e.g. FirebaseMessaging.onBackgroundMessage / CallKit)
-    can intercept the raw payload and launch full-screen ringing UI.
+    Guarantees background/killed app state handlers can launch full-screen incoming call UI.
+    Does NOT corrupt call state if Firebase is unavailable or fails.
     """
-    if not recipient or (hasattr(recipient, 'id') and recipient.id == caller.id):
-        logger.info(f"[CALL OFFER PUSH SKIPPED] Recipient missing or caller==recipient.")
+    caller_id = str(getattr(caller, 'id', ''))
+    recipient_id = str(getattr(recipient, 'id', ''))
+
+    if not recipient or not recipient_id or caller_id == recipient_id:
+        logger.info(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=recipient_missing_or_self caller_id={caller_id} receiver_id={recipient_id}")
         return None
 
     caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
+    recipient_name = getattr(recipient, 'get_full_name', lambda: '')() or getattr(recipient, 'username', '') or "Recipient"
     channel_name = agora_channel_name or (f"cagh_{call_type.lower()}_{session_key}" if session_key else f"cagh_consultation_{consultation.id}")
     app_id = agora_app_id or getattr(settings, 'AGORA_APP_ID', '')
 
-    recipient_name = getattr(recipient, 'get_full_name', lambda: '')() or getattr(recipient, 'username', '') or ""
-    import time
     call_payload = {
         "type": "incoming_call",
         "action": "INCOMING_CALL",
         "consultation_id": str(consultation.id),
         "call_id": session_key or str(consultation.id),
-        "session_id": session_key or "",
-        "session_key": session_key or "",
+        "session_id": session_key or str(consultation.id),
+        "session_key": session_key or str(consultation.id),
         "call_type": str(call_type),
-        "channel_name": channel_name,
-        "agora_channel_name": channel_name,
+        "channel_name": str(channel_name),
+        "agora_channel_name": str(channel_name),
         "agora_app_id": str(app_id),
-        "caller_id": str(caller.id),
+        "caller_id": caller_id,
         "caller_name": caller_name,
         "caller_role": str(getattr(caller, 'role', 'PATIENT')),
-        "receiver_id": str(recipient.id),
-        "recipient_id": str(recipient.id),
+        "receiver_id": recipient_id,
+        "recipient_id": recipient_id,
         "receiver_name": recipient_name,
         "recipient_name": recipient_name,
         "timestamp": str(int(time.time())),
@@ -146,10 +193,10 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
     )
 
     if not tokens:
-        logger.info(f"[CALL OFFER PUSH] No active FCM device token registered for {recipient.username}.")
+        logger.info(f"[CALL] call_id={session_key} event=FCM_NO_TOKENS receiver={recipient_id}")
         return None
 
-    logger.info(f"[CALL OFFER PUSH] Dispatching DATA-ONLY high-priority FCM offer to {recipient.username} ({len(tokens)} tokens). Payload: {call_payload}")
+    logger.info(f"[CALL] call_id={session_key} event=FCM_DISPATCHING caller={caller_id} receiver={recipient_id} token_count={len(tokens)}")
 
     if _firebase_initialized:
         try:
@@ -175,11 +222,16 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
                 ),
             )
             fb_app = init_firebase_admin()
+            if not fb_app:
+                logger.error(f"[CALL] call_id={session_key} event=FCM_SEND_FAILED error=firebase_app_null")
+                return None
+
             if hasattr(messaging, 'send_each_for_multicast'):
-                response = messaging.send_each_for_multicast(message, app=fb_app) if fb_app else messaging.send_each_for_multicast(message)
+                response = messaging.send_each_for_multicast(message, app=fb_app)
             else:
-                response = messaging.send_multicast(message, app=fb_app) if fb_app else messaging.send_multicast(message)
-            logger.info(f"[CALL OFFER PUSH SUCCESS] Sent to {recipient.username}. Success: {response.success_count}, Failure: {response.failure_count}")
+                response = messaging.send_multicast(message, app=fb_app)
+
+            logger.info(f"[CALL] call_id={session_key} event=FCM_SENT receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
 
             if response.failure_count > 0:
                 for idx, resp in enumerate(response.responses):
@@ -188,26 +240,30 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
                         if 'Unregistered' in err_code or 'InvalidArgument' in err_code:
                             stale_token = tokens[idx]
                             DeviceToken.objects.filter(token=stale_token).update(is_active=False)
-                            logger.info(f"[FCM TOKEN DEACTIVATED] Stale token deactivated: {stale_token[:15]}...")
+                            logger.info(f"[CALL] call_id={session_key} event=FCM_TOKEN_DEACTIVATED receiver={recipient_id}")
 
             return response
         except Exception as fe:
-            logger.error(f"[CALL OFFER PUSH ERROR] Failed sending data-only FCM push via Firebase Admin: {fe}")
+            logger.error(f"[CALL] call_id={session_key} event=FCM_SEND_FAILED receiver={recipient_id} error={fe}")
             return None
-
-    return None
+    else:
+        logger.warning(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=firebase_not_initialized receiver={recipient_id}")
+        return None
 
 
 def send_incoming_call_notification(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
     """
-    Triggers an in-app Notification and high-priority FCM call push notification to ring the recipient device.
+    Triggers an in-app Notification record and high-priority FCM call offer push notification.
     Strictly prevents self-calling (caller == recipient).
     """
-    if not recipient or (hasattr(recipient, 'id') and recipient.id == caller.id):
-        logger.info(f"[CALL NOTIFICATION SKIPPED] Recipient is missing or identical to caller (caller_id={getattr(caller, 'id', None)}).")
+    caller_id = str(getattr(caller, 'id', ''))
+    recipient_id = str(getattr(recipient, 'id', ''))
+
+    if not recipient or not recipient_id or caller_id == recipient_id:
+        logger.info(f"[CALL] call_id={session_key} event=CALL_NOTIFICATION_SKIPPED reason=self_call_or_missing_recipient caller_id={caller_id}")
         return None
 
-    caller_name = getattr(caller, 'get_full_name', lambda: '')() or caller.username or "Healthcare Provider"
+    caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
 
     title = f"Incoming {call_type.title()} Call"
     body = f"{caller_name} is calling you for your scheduled consultation."
@@ -234,3 +290,4 @@ def send_incoming_call_notification(caller, recipient, consultation, call_type="
     )
 
     return notification
+

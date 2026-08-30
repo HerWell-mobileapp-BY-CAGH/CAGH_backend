@@ -17,6 +17,7 @@ from .serializers import (
     VideoSessionSerializer,
 )
 from .agora_service import AgoraService, Role as AgoraRole
+from .services import VoiceCallService
 from apps.appointments.models import Appointment
 from apps.notifications.models import Notification
 from apps.notifications.call_notifications import send_incoming_call_notification
@@ -288,182 +289,13 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
-        with transaction.atomic():
-            consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-
-            if consultation.status == Consultation.ConsultationStatus.COMPLETED:
-                return Response({"error": "Completed consultations cannot be restarted."}, status=status.HTTP_400_BAD_REQUEST)
-
-            consultation.status = Consultation.ConsultationStatus.ACTIVE
-            consultation.save(update_fields=['status'])
-
-            caller = request.user
-            recipient = None
-            if is_midwife:
-                recipient = consultation.user
-            else:
-                if hasattr(consultation, 'midwife') and consultation.midwife:
-                    recipient = getattr(consultation.midwife, 'user', None) or consultation.midwife
-            if hasattr(recipient, 'user') and recipient.user:
-                recipient = recipient.user
-            if recipient and str(recipient.id) == str(caller.id):
-                recipient = None
-
-            if recipient is None:
-                import logging
-                logging.getLogger(__name__).warning(
-                    f"[VOICE START] No recipient resolved for consultation {consultation.id} — "
-                    f"is_midwife={is_midwife}, midwife_user={getattr(getattr(consultation, 'midwife', None), 'user_id', None)}"
-                )
-
-
-            session_key = None
-            agora_channel_name = None
-            call_type = "VOICE"
-
-            # Handle both VIRTUAL_VOICE and VIRTUAL_VIDEO consultations seamlessly
-            active_session = VoiceSession.objects.select_for_update().filter(
-                consultation=consultation
-            ).exclude(
-                status__in=[
-                    VoiceSession.VoiceSessionStatus.CANCELLED,
-                    VoiceSession.VoiceSessionStatus.DECLINED,
-                    VoiceSession.VoiceSessionStatus.MISSED,
-                    VoiceSession.VoiceSessionStatus.ENDED,
-                    VoiceSession.VoiceSessionStatus.FAILED,
-                ]
-            ).first()
-
-            if active_session:
-                session = active_session
-                session_key = session.session_key
-                agora_channel_name = session.agora_channel_name
-                is_new_call_attempt = False
-            else:
-                session_key = f"VOICE-{uuid.uuid4().hex[:12].upper()}"
-                session = VoiceSession.objects.create(
-                    consultation=consultation,
-                    session_key=session_key,
-                    agora_channel_name=f"cagh_voice_{session_key}",
-                    status=VoiceSession.VoiceSessionStatus.RINGING,
-                    caller=caller,
-                )
-                agora_channel_name = session.agora_channel_name
-                is_new_call_attempt = True
-
-            session_key = session.session_key
-            agora_channel_name = session.agora_channel_name
-            call_type = "VOICE"
-
-        # FCM Call Notification (Dispatched ONLY ONCE per new call attempt)
-        if is_new_call_attempt:
-            try:
-                send_incoming_call_notification(
-                    caller=caller,
-                    recipient=recipient,
-                    consultation=consultation,
-                    call_type=call_type,
-                    session_key=session_key,
-                    agora_channel_name=agora_channel_name,
-                )
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"[FCM] send_incoming_call_notification failed: {e}", exc_info=True)
-
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-        serializer = self.get_serializer(consultation)
-
-        caller_name = self._get_display_name(caller) or getattr(caller, 'username', 'Caller')
-        recipient_name = self._get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
-
-        if recipient:
-            try:
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    ws_payload = {
-                        'type': 'incoming_call',
-                        'action': 'incoming_call',
-                        'event': 'incoming_call',
-                        'consultation_id': str(consultation.id),
-                        'appointment_id': str(consultation.appointment.id) if consultation.appointment else str(consultation.id),
-                        'sender_id': str(caller.id),
-                        'caller_id': str(caller.id),
-                        'sender_name': caller_name,
-                        'caller_name': caller_name,
-                        'receiver_id': str(recipient.id),
-                        'recipient_id': str(recipient.id),
-                        'receiver_name': recipient_name,
-                        'recipient_name': recipient_name,
-                        'call_type': call_type,
-                        'agora_channel_name': agora_channel_name,
-                        'agora_app_id': agora_app_id,
-                    }
-                    async_to_sync(channel_layer.group_send)(
-                        f"user_calls_{recipient.id}",
-                        {
-                            'type': 'broadcast_user_incoming_call',
-                            'data': ws_payload,
-                        }
-                    )
-                    async_to_sync(channel_layer.group_send)(
-                        f"consultation_call_{consultation.id}",
-                        {
-                            'type': 'broadcast_incoming_call',
-                            'sender_id': str(caller.id),
-                            'sender_name': caller_name,
-                            'call_type': call_type,
-                            'consultation_id': str(consultation.id),
-                        }
-                    )
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"WebSocket call notification error: {e}")
-
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-        agora_token = AgoraService.generate_rtc_token(
-            channel_name=agora_channel_name,
-            uid=caller.id,
-            role=AgoraRole.PUBLISHER
-        )
-        serializer = self.get_serializer(consultation)
-
-        return Response({
-            'status': 'RINGING',
-            'started_at': consultation.started_at,
-            'call_type': call_type,
-            'session_key': session_key,
-            'agora_channel_name': agora_channel_name,
-            'agora_app_id': agora_app_id,
-            'agora_token': agora_token,
-            'uid': AgoraService.get_numeric_uid(caller.id),
-            'caller_id': str(caller.id),
-            'caller_name': caller_name,
-            'recipient_id': str(recipient.id) if recipient else "",
-            'recipient_name': recipient_name,
-            'consultation': serializer.data,
-        }, status=status.HTTP_200_OK)
+        consultation = self.get_object()
+        res_data = VoiceCallService.start_call(consultation, request.user, call_type="VOICE")
+        res_data['consultation'] = self.get_serializer(consultation).data
+        return Response(res_data, status=status.HTTP_200_OK)
 
     def _get_voice_session(self, consultation, select_for_update=False):
-        qs = VoiceSession.objects.filter(consultation=consultation)
-        if select_for_update:
-            qs = qs.select_for_update()
-
-        active = qs.exclude(
-            status__in=[
-                VoiceSession.VoiceSessionStatus.CANCELLED,
-                VoiceSession.VoiceSessionStatus.DECLINED,
-                VoiceSession.VoiceSessionStatus.MISSED,
-                VoiceSession.VoiceSessionStatus.ENDED,
-                VoiceSession.VoiceSessionStatus.FAILED,
-            ]
-        ).order_by('-created_at').first()
-
-        if active:
-            return active
-
-        return qs.order_by('-created_at').first()
+        return VoiceCallService.get_voice_session(consultation, select_for_update=select_for_update)
 
     @extend_schema(
         summary="Start consultation call ringing (Voice Session Alias)",
@@ -476,68 +308,14 @@ class ConsultationViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary="Accept Voice Call & Retrieve Signed Agora Token",
-
         tags=["Consultations"],
         responses={200: VoiceAcceptResponseSerializer}
     )
     @action(detail=True, methods=['post'], url_path='voice-session/accept')
     def voice_session_accept(self, request, pk=None):
-        with transaction.atomic():
-            consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-
-            session = self._get_voice_session(consultation, select_for_update=True)
-            if not session:
-                return Response({"error": "No voice session found to accept."}, status=status.HTTP_404_NOT_FOUND)
-
-            # Auto-expire check
-            self._check_and_auto_expire_ringing_session(session)
-
-            # Race condition protection: Reject if already cancelled, declined, missed, or ended
-            if session.status in [VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.ENDED]:
-                return Response(
-                    {"error": f"Cannot accept call. Call status is '{session.status}'."},
-                    status=status.HTTP_409_CONFLICT
-                )
-
-            session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
-            if not session.started_at:
-                session.started_at = timezone.now()
-            if not session.agora_channel_name:
-                session.agora_channel_name = f"cagh_voice_{session.session_key}"
-            session.save()
-
-            consultation.status = Consultation.ConsultationStatus.ACTIVE
-            if not consultation.started_at:
-                consultation.started_at = timezone.now()
-            consultation.save()
-
-        self._broadcast_call_status(consultation, session, request.user, 'ACCEPTED')
-
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-        token = AgoraService.generate_rtc_token(
-            channel_name=session.agora_channel_name,
-            uid=request.user.id,
-            role=AgoraRole.PUBLISHER
-        )
-
-        caller = session.caller
-        recipient = consultation.user if caller != consultation.user else (consultation.midwife.user if consultation.midwife else None)
-        caller_name = self._get_display_name(caller) or getattr(caller, 'username', 'Caller')
-        recipient_name = self._get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
-
-        return Response({
-            'status': 'ACCEPTED',
-            'session_key': session.session_key,
-            'agora_channel_name': session.agora_channel_name,
-            'agora_app_id': agora_app_id,
-            'agora_token': token,
-            'uid': AgoraService.get_numeric_uid(request.user.id),
-            'started_at': session.started_at,
-            'caller_id': str(caller.id) if caller else "",
-            'caller_name': caller_name,
-            'recipient_id': str(recipient.id) if recipient else "",
-            'recipient_name': recipient_name,
-        }, status=status.HTTP_200_OK)
+        consultation = self.get_object()
+        data, code = VoiceCallService.accept_call(consultation, request.user)
+        return Response(data, status=code)
 
     @extend_schema(
         summary="Mark Call ONGOING when Agora Audio Connects",
@@ -546,17 +324,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/connect')
     def voice_session_connect(self, request, pk=None):
-        with transaction.atomic():
-            consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = self._get_voice_session(consultation, select_for_update=True)
-            if not session:
-                return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
-
-            if session.status in [VoiceSession.VoiceSessionStatus.ACCEPTED, VoiceSession.VoiceSessionStatus.RINGING]:
-                session.status = VoiceSession.VoiceSessionStatus.ONGOING
-                session.save(update_fields=['status'])
-
-        return Response({'status': session.status}, status=status.HTTP_200_OK)
+        consultation = self.get_object()
+        data, code = VoiceCallService.connect_call(consultation, request.user)
+        return Response(data, status=code)
 
     @extend_schema(
         summary="Decline Voice Call",
@@ -565,28 +335,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/decline')
     def voice_session_decline(self, request, pk=None):
-        with transaction.atomic():
-            consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = self._get_voice_session(consultation, select_for_update=True)
-            if not session:
-                return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
-
-            if session.status == VoiceSession.VoiceSessionStatus.DECLINED:
-                return Response({'status': 'DECLINED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
-
-            if session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
-                return Response(
-                    {"error": f"Cannot decline call. Call status is '{session.status}'."},
-                    status=status.HTTP_409_CONFLICT
-                )
-
-            session.status = VoiceSession.VoiceSessionStatus.DECLINED
-            session.ended_at = timezone.now()
-            session.save()
-
-            self._broadcast_call_status(consultation, session, request.user, 'DECLINED', ended_at=session.ended_at)
-
-        return Response({'status': 'DECLINED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
+        consultation = self.get_object()
+        data, code = VoiceCallService.decline_call(consultation, request.user)
+        return Response(data, status=code)
 
     @extend_schema(
         summary="Cancel Voice Call (Caller side)",
@@ -595,28 +346,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/cancel')
     def voice_session_cancel(self, request, pk=None):
-        with transaction.atomic():
-            consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = self._get_voice_session(consultation, select_for_update=True)
-            if not session:
-                return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
-
-            if session.status == VoiceSession.VoiceSessionStatus.CANCELLED:
-                return Response({'status': 'CANCELLED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
-
-            if session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
-                return Response(
-                    {"error": f"Cannot cancel call. Call status is '{session.status}'."},
-                    status=status.HTTP_409_CONFLICT
-                )
-
-            session.status = VoiceSession.VoiceSessionStatus.CANCELLED
-            session.ended_at = timezone.now()
-            session.save()
-
-            self._broadcast_call_status(consultation, session, request.user, 'CANCELLED', ended_at=session.ended_at)
-
-        return Response({'status': 'CANCELLED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
+        consultation = self.get_object()
+        data, code = VoiceCallService.cancel_call(consultation, request.user)
+        return Response(data, status=code)
 
     @extend_schema(
         summary="Mark Voice Call as Missed (Ringing Timeout)",
@@ -625,20 +357,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/missed')
     def voice_session_missed(self, request, pk=None):
-        with transaction.atomic():
-            consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = self._get_voice_session(consultation, select_for_update=True)
-            if not session:
-                return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
-
-            if session.status == VoiceSession.VoiceSessionStatus.MISSED:
-                return Response({'status': 'MISSED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
-
-            session.status = VoiceSession.VoiceSessionStatus.MISSED
-            session.ended_at = timezone.now()
-            session.save()
-
-        return Response({'status': 'MISSED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
+        consultation = self.get_object()
+        data, code = VoiceCallService.missed_call(consultation, request.user)
+        return Response(data, status=code)
 
     @extend_schema(
         summary="End Voice Call",
@@ -647,23 +368,9 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/end')
     def voice_session_end(self, request, pk=None):
-        with transaction.atomic():
-            consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-            session = self._get_voice_session(consultation, select_for_update=True)
-            if not session:
-                return Response({"error": "No voice session found."}, status=status.HTTP_404_NOT_FOUND)
-
-            if session.status in [VoiceSession.VoiceSessionStatus.ENDED, VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.FAILED]:
-                return Response({'status': session.status, 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
-
-            session.status = VoiceSession.VoiceSessionStatus.ENDED
-            session.ended_at = timezone.now()
-            session.save()
-
-            self._broadcast_call_status(consultation, session, request.user, 'ENDED', ended_at=session.ended_at)
-
-        return Response({'status': 'ENDED', 'ended_at': session.ended_at}, status=status.HTTP_200_OK)
-
+        consultation = self.get_object()
+        data, code = VoiceCallService.end_call(consultation, request.user)
+        return Response(data, status=code)
 
     @extend_schema(
         summary="Get authorized short-lived Agora Token for active call",
@@ -672,156 +379,40 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['get', 'post'], url_path='voice-session/token')
     def voice_session_token(self, request, pk=None):
-        consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-
-        session = self._get_voice_session(consultation, select_for_update=False)
-        if not session:
-            return Response({'error': 'No voice session found for this consultation.'}, status=status.HTTP_404_NOT_FOUND)
-        self._check_and_auto_expire_ringing_session(session)
-
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-        if session.status in [VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.ENDED, VoiceSession.VoiceSessionStatus.FAILED]:
-            return Response({
-                'agora_app_id': agora_app_id,
-                'agora_channel_name': session.agora_channel_name or "",
-                'agora_token': "",
-                'uid': AgoraService.get_numeric_uid(request.user.id),
-                'session_key': session.session_key,
-                'status': session.status,
-            }, status=status.HTTP_200_OK)
-
-        if not session.agora_channel_name:
-            session.agora_channel_name = f"cagh_voice_{session.session_key}"
-            session.save(update_fields=['agora_channel_name'])
-
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-        token = AgoraService.generate_rtc_token(
-            channel_name=session.agora_channel_name,
-            uid=request.user.id,
-            role=AgoraRole.PUBLISHER
-        )
-
-        caller = session.caller
-        recipient = consultation.user if caller != consultation.user else (consultation.midwife.user if consultation.midwife else None)
-        caller_name = self._get_display_name(caller) or getattr(caller, 'username', 'Caller')
-        recipient_name = self._get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
-
-        return Response({
-            'agora_app_id': agora_app_id,
-            'agora_channel_name': session.agora_channel_name,
-            'agora_token': token,
-            'uid': AgoraService.get_numeric_uid(request.user.id),
-            'session_key': session.session_key,
-            'status': session.status,
-            'started_at': session.started_at,
-            'caller_id': str(caller.id) if caller else "",
-            'caller_name': caller_name,
-            'recipient_id': str(recipient.id) if recipient else "",
-            'recipient_name': recipient_name,
-        }, status=status.HTTP_200_OK)
+        consultation = self.get_object()
+        data, code = VoiceCallService.generate_agora_token(consultation, request.user)
+        return Response(data, status=code)
 
     @extend_schema(summary="Manage Virtual Voice Session status", tags=["Consultations"])
     @action(detail=True, methods=['get', 'post'], url_path='voice-session')
     def manage_voice_session(self, request, pk=None):
-        consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
+        consultation = self.get_object()
         action_type = request.data.get('action', 'STATUS') if request.method == 'POST' else 'STATUS'
 
-        with transaction.atomic():
-            session = self._get_voice_session(consultation, select_for_update=True)
-            if not session:
-                session_key = f"VOICE-{uuid.uuid4().hex[:12].upper()}"
-                session = VoiceSession.objects.create(
-                    consultation=consultation,
-                    session_key=session_key,
-                    agora_channel_name=f"cagh_voice_{session_key}",
-                    status=VoiceSession.VoiceSessionStatus.INITIATED,
-                    caller=request.user,
-                )
+        if action_type == 'START':
+            return self.start(request, pk=pk)
+        elif action_type == 'ACCEPT':
+            data, code = VoiceCallService.accept_call(consultation, request.user)
+            return Response(data, status=code)
+        elif action_type == 'CONNECT':
+            data, code = VoiceCallService.connect_call(consultation, request.user)
+            return Response(data, status=code)
+        elif action_type == 'DECLINE':
+            data, code = VoiceCallService.decline_call(consultation, request.user)
+            return Response(data, status=code)
+        elif action_type == 'CANCEL':
+            data, code = VoiceCallService.cancel_call(consultation, request.user)
+            return Response(data, status=code)
+        elif action_type == 'MISSED':
+            data, code = VoiceCallService.missed_call(consultation, request.user)
+            return Response(data, status=code)
+        elif action_type == 'END':
+            data, code = VoiceCallService.end_call(consultation, request.user)
+            return Response(data, status=code)
+        else:
+            data, code = VoiceCallService.generate_agora_token(consultation, request.user)
+            return Response(data, status=code)
 
-            self._check_and_auto_expire_ringing_session(session)
-
-            if action_type == 'START':
-                session.status = VoiceSession.VoiceSessionStatus.RINGING
-                session.caller = request.user
-                session.save()
-                return self.start(request, pk=pk)
-            elif action_type == 'ACCEPT':
-                if session.status in [VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.ENDED]:
-                    return Response(
-                        {"error": f"Cannot accept call. Call status is '{session.status}'."},
-                        status=status.HTTP_409_CONFLICT
-                    )
-                session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
-                if not session.started_at:
-                    session.started_at = timezone.now()
-                if not session.agora_channel_name:
-                    session.agora_channel_name = f"cagh_voice_{session.session_key}"
-                session.save()
-                consultation.status = Consultation.ConsultationStatus.ACTIVE
-                if not consultation.started_at:
-                    consultation.started_at = timezone.now()
-                consultation.save()
-                self._broadcast_call_status(consultation, session, request.user, 'ACCEPTED')
-            elif action_type == 'CONNECT':
-                if session.status in [VoiceSession.VoiceSessionStatus.ACCEPTED, VoiceSession.VoiceSessionStatus.RINGING]:
-                    session.status = VoiceSession.VoiceSessionStatus.ONGOING
-                    session.save(update_fields=['status'])
-            elif action_type == 'DECLINE':
-                if session.status == VoiceSession.VoiceSessionStatus.DECLINED:
-                    pass
-                elif session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
-                    return Response(
-                        {"error": f"Cannot decline call. Call status is '{session.status}'."},
-                        status=status.HTTP_409_CONFLICT
-                    )
-                else:
-                    session.status = VoiceSession.VoiceSessionStatus.DECLINED
-                    session.ended_at = timezone.now()
-                    session.save()
-                    self._broadcast_call_status(consultation, session, request.user, 'DECLINED', ended_at=session.ended_at)
-            elif action_type == 'CANCEL':
-                if session.status == VoiceSession.VoiceSessionStatus.CANCELLED:
-                    pass
-                elif session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
-                    return Response(
-                        {"error": f"Cannot cancel call. Call status is '{session.status}'."},
-                        status=status.HTTP_409_CONFLICT
-                    )
-                else:
-                    session.status = VoiceSession.VoiceSessionStatus.CANCELLED
-                    session.ended_at = timezone.now()
-                    session.save()
-                    self._broadcast_call_status(consultation, session, request.user, 'CANCELLED', ended_at=session.ended_at)
-            elif action_type == 'MISSED':
-                if session.status == VoiceSession.VoiceSessionStatus.MISSED:
-                    pass
-                else:
-                    session.status = VoiceSession.VoiceSessionStatus.MISSED
-                    session.ended_at = timezone.now()
-                    session.save()
-                    self._broadcast_call_status(consultation, session, request.user, 'MISSED', ended_at=session.ended_at)
-            elif action_type == 'END':
-                if session.status in [VoiceSession.VoiceSessionStatus.ENDED, VoiceSession.VoiceSessionStatus.CANCELLED, VoiceSession.VoiceSessionStatus.DECLINED, VoiceSession.VoiceSessionStatus.MISSED, VoiceSession.VoiceSessionStatus.FAILED]:
-                    pass
-                else:
-                    session.status = VoiceSession.VoiceSessionStatus.ENDED
-                    session.ended_at = timezone.now()
-                    session.save()
-                    self._broadcast_call_status(consultation, session, request.user, 'ENDED', ended_at=session.ended_at)
-
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-        agora_token = AgoraService.generate_rtc_token(
-            channel_name=session.agora_channel_name,
-            uid=request.user.id,
-            role=AgoraRole.PUBLISHER
-        )
-
-        serializer = VoiceSessionSerializer(session)
-        data = serializer.data
-        data['agora_app_id'] = agora_app_id
-        data['agora_token'] = agora_token
-        data['uid'] = AgoraService.get_numeric_uid(request.user.id)
-        return Response(data, status=status.HTTP_200_OK)
 
     @extend_schema(summary="Manage Virtual Video Session status", tags=["Consultations"])
     @action(detail=True, methods=['post'], url_path='video-session')
