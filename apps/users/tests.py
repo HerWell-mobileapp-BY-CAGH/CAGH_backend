@@ -211,6 +211,53 @@ class AuthenticationTestCase(APITestCase):
         self.assertEqual(res_no_role.status_code, status.HTTP_200_OK)
         self.assertEqual(res_no_role.data["user"]["role"], User.Role.MIDWIFE)
 
+    def test_admin_login_requires_provisioned_admin_account(self):
+        """Only an account with ADMIN role and Django staff access gets admin JWTs."""
+        url = reverse("auth-admin-login")
+        password = "AdminPassword123!"
+
+        admin_user = User.objects.create_user(
+            username="dashboard_admin",
+            email="dashboard-admin@example.com",
+            password=password,
+            role=User.Role.ADMIN,
+            is_staff=True,
+        )
+        allowed = self.client.post(
+            url,
+            {"email": admin_user.email, "password": password},
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+        self.assertEqual(allowed.data["login_role"], User.Role.ADMIN)
+
+        patient = User.objects.create_user(
+            username="not_an_admin",
+            email="not-an-admin@example.com",
+            password=password,
+            role=User.Role.PATIENT,
+        )
+        denied = self.client.post(
+            url,
+            {"email": patient.email, "password": password},
+            format="json",
+        )
+        self.assertEqual(denied.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_public_registration_cannot_create_admin(self):
+        """The public registration API must never mint privileged accounts."""
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "email": "attempted-admin@example.com",
+                "password": "SecurePassword123!",
+                "password_confirm": "SecurePassword123!",
+                "role": "ADMIN",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_otp_login_role_mismatch_fails(self):
         midwife = User.objects.create_user(
             username="midwife_otp_user",

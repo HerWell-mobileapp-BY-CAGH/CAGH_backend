@@ -1,7 +1,17 @@
 import uuid
 from django.db import models
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
 from django.utils.translation import gettext_lazy as _
+
+
+class UserManager(DjangoUserManager):
+    """Create Django superusers with the application ADMIN role as well."""
+
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        # Django sets is_staff/is_superuser. The API also relies on the domain
+        # role, so keep both authorization systems aligned at creation time.
+        extra_fields.setdefault("role", "ADMIN")
+        return super().create_superuser(username, email, password, **extra_fields)
 
 
 class User(AbstractUser):
@@ -28,6 +38,10 @@ class User(AbstractUser):
     email = models.EmailField(_('email address'), unique=True, null=True, blank=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.PATIENT)
     phone_number = models.CharField(max_length=20, unique=True, null=True, blank=True)
+
+    # This makes `createsuperuser` valid for both Django's /admin/ and the
+    # administrator JWT sign-in endpoint.
+    objects = UserManager()
 
     def __str__(self):
         identifier = self.email or self.phone_number or self.username or str(self.id)

@@ -117,8 +117,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         if raw_val:
             normalized = User.Role.normalize(raw_val)
-            if normalized in (User.Role.PATIENT, User.Role.MIDWIFE, User.Role.ADMIN):
+            # Privileged accounts must be provisioned by an existing admin;
+            # public registration may create only patient or midwife accounts.
+            if normalized in (User.Role.PATIENT, User.Role.MIDWIFE):
                 return normalized
+            if normalized == User.Role.ADMIN:
+                raise serializers.ValidationError(
+                    "Admin accounts cannot be created through public registration."
+                )
         return User.Role.PATIENT
 
     def validate_email(self, value):

@@ -136,3 +136,35 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     """POST /api/v1/auth/login/ — returns access + refresh token plus user details."""
 
     serializer_class = CustomTokenObtainPairSerializer
+
+
+class AdminTokenObtainPairSerializer(CustomTokenObtainPairSerializer):
+    """Issue JWTs only to accounts provisioned for the administrator dashboard."""
+
+    def validate(self, attrs):
+        # Reuse the identifier/password handling and standard token response.
+        data = super().validate(attrs)
+
+        from apps.users.models import User
+
+        # Requiring both values prevents a user whose role changed accidentally
+        # from receiving dashboard credentials. `createsuperuser` and
+        # `reset_admin` create legitimate accounts with both values.
+        if (
+            User.Role.normalize(self.user.role) != User.Role.ADMIN
+            or not self.user.is_staff
+        ):
+            raise AuthenticationFailed(
+                "This account is not authorized to access the administrator dashboard.",
+                code="admin_access_required",
+            )
+
+        # This explicitly tells the client which interface the JWT was issued for.
+        data["login_role"] = User.Role.ADMIN
+        return data
+
+
+class AdminTokenObtainPairView(TokenObtainPairView):
+    """Administrator-only JWT sign-in endpoint."""
+
+    serializer_class = AdminTokenObtainPairSerializer
