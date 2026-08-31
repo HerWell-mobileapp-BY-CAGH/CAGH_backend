@@ -349,7 +349,9 @@ class VoiceCallService:
             'uid': AgoraService.get_numeric_uid(caller.id),
             'caller_id': str(caller.id),
             'caller_name': caller_name,
+            'receiver_id': str(recipient.id) if recipient else "",
             'recipient_id': str(recipient.id) if recipient else "",
+            'receiver_name': recipient_name,
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
         }
@@ -414,7 +416,9 @@ class VoiceCallService:
             'started_at': session.started_at,
             'caller_id': str(caller.id) if caller else "",
             'caller_name': caller_name,
+            'receiver_id': str(recipient.id) if recipient else "",
             'recipient_id': str(recipient.id) if recipient else "",
+            'receiver_name': recipient_name,
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
         }, 200
@@ -606,7 +610,9 @@ class VoiceCallService:
             'started_at': session.started_at,
             'caller_id': str(caller.id) if caller else "",
             'caller_name': caller_name,
+            'receiver_id': str(recipient.id) if recipient else "",
             'recipient_id': str(recipient.id) if recipient else "",
+            'receiver_name': recipient_name,
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
         }, 200

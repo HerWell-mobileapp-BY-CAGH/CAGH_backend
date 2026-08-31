@@ -74,7 +74,9 @@ class AgoraService:
                 role=role,
                 privilegeExpiredTs=privilege_expired_ts
             )
-            logger.info(f"[AGORA DEBUG] token_prefix={token[:10] if token else None} | app_id={app_id} | uid={numeric_uid} | channel={channel_name} | role={role} | expires={privilege_expired_ts} | now={current_ts}")
+            token_prefix = token[:10] if token else None
+            logger.info(f"[AGORA TOKEN DEBUG] app_id={app_id} numeric_uid={numeric_uid} channel={channel_name} token_prefix={token_prefix} expires={privilege_expired_ts}")
+            logger.info(f"[AGORA DEBUG] token_prefix={token_prefix} | app_id={app_id} | uid={numeric_uid} | channel={channel_name} | role={role} | expires={privilege_expired_ts} | now={current_ts}")
             if not token:
                 raise ValueError("RtcTokenBuilder.buildTokenWithUid returned empty or None token.")
             return token
