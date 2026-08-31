@@ -85,7 +85,12 @@ class VoiceCallService:
             recipient = midwife_user
 
         if recipient and str(recipient.id) == user_id_str:
-            recipient = None
+            logger.info(f"[CALL] event=SELF_CALL_REJECTED caller={user_id_str} receiver={user_id_str}")
+            raise ValidationError({"error": "Self-calling is prohibited. Caller and receiver cannot be the same user."})
+
+        if not recipient:
+            logger.info(f"[CALL] event=SELF_CALL_REJECTED caller={user_id_str} receiver=None")
+            raise ValidationError({"error": "No valid recipient found for this consultation call."})
 
         return is_patient, is_midwife, recipient
 
@@ -125,6 +130,7 @@ class VoiceCallService:
                 'event': event_name,
                 'status': action_type,
                 'sender_id': user_id_str,
+                'caller_id': user_id_str,
                 'consultation_id': str(consultation.id),
                 'session_id': session.session_key if session else "",
                 'call_id': session.session_key if session else "",
@@ -156,14 +162,17 @@ class VoiceCallService:
                     recipient_id = patient_id
 
             if recipient_id and recipient_id != user_id_str:
+                ws_payload['receiver_id'] = recipient_id
+                ws_payload['recipient_id'] = recipient_id
                 async_to_sync(channel_layer.group_send)(
                     f"user_calls_{recipient_id}",
                     {
-                        'type': 'broadcast_user_incoming_call',
-                        'data': ws_payload
+                        'type': 'call_signal',
+                        'data': ws_payload,
+                        **ws_payload
                     }
                 )
-                logger.info(f"[CALL] call_id={getattr(session, 'session_key', None)} event=WS_USER_SIGNAL_SENT recipient={recipient_id} action={action_name if 'action_name' in locals() else event_name}")
+                logger.info(f"[CALL] call_id={getattr(session, 'session_key', None)} event=WS_USER_SIGNAL_SENT recipient={recipient_id} action={event_name}")
         except Exception as e:
             logger.error(f"[CALL] event=WS_BROADCAST_ERROR action={action_type} error={e}")
 
@@ -224,7 +233,66 @@ class VoiceCallService:
                 is_new_call_attempt = True
                 logger.info(f"[CALL] call_id={session_key} event=VOICE_SESSION_CREATED caller={caller.id} receiver={getattr(recipient, 'id', None)}")
 
-        # Schedule Celery background ringing timeout execution & dispatch FCM
+        caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
+        recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
+        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
+
+        # 1. Authoritative WebSocket Call Offer Dispatch (Independent of FCM)
+        if broadcast_ws and recipient and is_new_call_attempt:
+            group_name = f"user_calls_{recipient.id}"
+            logger.info(
+                f"[CALL] call_id={session_key} event=WS_CALL_OFFER_DISPATCHING receiver={recipient.id} group={group_name}"
+            )
+            try:
+                from channels.layers import get_channel_layer
+                from asgiref.sync import async_to_sync
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    ws_payload = {
+                        "type": "call_signal",
+                        "action": "call_offer",
+                        "event": "VOICE_SESSION_CREATED",
+                        "call_id": session_key,
+                        "session_id": session_key,
+                        "session_key": session_key,
+                        "consultation_id": str(consultation.id),
+                        "appointment_id": str(consultation.appointment.id) if consultation.appointment else str(consultation.id),
+                        "caller_id": str(caller.id),
+                        "receiver_id": str(recipient.id),
+                        "recipient_id": str(recipient.id),
+                        "caller_name": caller_name,
+                        "receiver_name": recipient_name,
+                        "recipient_name": recipient_name,
+                        "call_type": call_type,
+                        "agora_channel_name": agora_channel_name,
+                        "agora_app_id": agora_app_id,
+                        "timestamp": str(int(timezone.now().timestamp())),
+                    }
+                    async_to_sync(channel_layer.group_send)(
+                        group_name,
+                        ws_payload
+                    )
+                    logger.info(
+                        f"[CALL] call_id={session_key} event=WS_CALL_OFFER_SENT recipient={recipient.id} action=call_offer"
+                    )
+                    async_to_sync(channel_layer.group_send)(
+                        f"consultation_call_{consultation.id}",
+                        {
+                            'type': 'broadcast_incoming_call',
+                            'sender_id': str(caller.id),
+                            'sender_name': caller_name,
+                            'call_type': call_type,
+                            'consultation_id': str(consultation.id),
+                            'session_id': session_key,
+                            'call_id': session_key,
+                        }
+                    )
+            except Exception:
+                logger.exception(
+                    f"[CALL] call_id={session_key} event=WS_CALL_OFFER_FAILED recipient={recipient.id}"
+                )
+
+        # 2. Schedule Celery background ringing timeout execution & FCM dispatch
         if is_new_call_attempt:
             import sys
             if 'test' not in sys.argv and not getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
@@ -246,64 +314,10 @@ class VoiceCallService:
                         call_type=call_type,
                         session_key=session_key,
                         agora_channel_name=agora_channel_name,
+                        agora_app_id=agora_app_id,
                     )
                 except Exception as e:
                     logger.error(f"[CALL] call_id={session_key} event=FCM_NOTIFICATION_ERROR error={e}")
-
-        caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
-        recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-
-        # WebSocket Broadcast for new call attempt (If triggered from REST endpoint)
-        if broadcast_ws and recipient:
-            try:
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    ws_payload = {
-                        'type': 'incoming_call',
-                        'action': 'INCOMING_CALL',
-                        'event': 'incoming_call',
-                        'call_id': session_key,
-                        'session_id': session_key,
-                        'session_key': session_key,
-                        'consultation_id': str(consultation.id),
-                        'appointment_id': str(consultation.appointment.id) if consultation.appointment else str(consultation.id),
-                        'sender_id': str(caller.id),
-                        'caller_id': str(caller.id),
-                        'sender_name': caller_name,
-                        'caller_name': caller_name,
-                        'receiver_id': str(recipient.id),
-                        'recipient_id': str(recipient.id),
-                        'receiver_name': recipient_name,
-                        'recipient_name': recipient_name,
-                        'call_type': call_type,
-                        'agora_channel_name': agora_channel_name,
-                        'agora_app_id': agora_app_id,
-                        'timestamp': str(int(timezone.now().timestamp())),
-                    }
-                    async_to_sync(channel_layer.group_send)(
-                        f"user_calls_{recipient.id}",
-                        {
-                            'type': 'broadcast_user_incoming_call',
-                            'data': ws_payload,
-                        }
-                    )
-                    async_to_sync(channel_layer.group_send)(
-                        f"consultation_call_{consultation.id}",
-                        {
-                            'type': 'broadcast_incoming_call',
-                            'sender_id': str(caller.id),
-                            'sender_name': caller_name,
-                            'call_type': call_type,
-                            'consultation_id': str(consultation.id),
-                            'session_id': session_key,
-                            'call_id': session_key,
-                        }
-                    )
-            except Exception as e:
-                logger.error(f"[CALL] call_id={session_key} event=WS_NOTIFICATION_ERROR error={e}")
 
         agora_token = AgoraService.generate_rtc_token(
             channel_name=agora_channel_name,

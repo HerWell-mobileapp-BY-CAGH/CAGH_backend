@@ -6,12 +6,14 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from channels.testing import WebsocketCommunicator
 
 from apps.appointments.models import Appointment
 from apps.midwives.models import MidwifeProfile
 from apps.consultations.models import Consultation, VoiceSession
 from apps.consultations.services import VoiceCallService
+from apps.consultations.consumers import UserCallConsumer
 from apps.notifications.models import DeviceToken
 from apps.notifications.call_notifications import init_firebase_admin, send_call_offer_push
 
@@ -252,3 +254,220 @@ class VoiceCallBackendTestCase(APITestCase):
         self.assertEqual(token_code, status.HTTP_200_OK)
         self.assertEqual(token_res["agora_token"], "")
         self.assertEqual(token_res["status"], "ENDED")
+
+    @patch("channels.layers.InMemoryChannelLayer.group_send")
+    def test_ws_call_offer_dispatched_to_receiver_group(self, mock_group_send):
+        # Test 1, 2, 3: Dispatches call_offer to user_calls_<receiver.id> with canonical payload
+        start_res = VoiceCallService.start_call(self.consultation, self.patient)
+        self.assertEqual(start_res["status"], "RINGING")
+
+        expected_group = f"user_calls_{self.midwife_user.id}"
+
+        # Find the group_send call for user_calls_<receiver_id>
+        target_calls = [
+            call_args for call_args in mock_group_send.call_args_list
+            if call_args[0][0] == expected_group
+        ]
+        self.assertTrue(len(target_calls) >= 1)
+
+        payload = target_calls[0][0][1]
+        self.assertEqual(payload["type"], "call_signal")
+        self.assertEqual(payload["action"], "call_offer")
+        self.assertEqual(payload["event"], "VOICE_SESSION_CREATED")
+        self.assertEqual(payload["call_id"], start_res["session_key"])
+        self.assertEqual(payload["consultation_id"], str(self.consultation.id))
+        self.assertEqual(payload["caller_id"], str(self.patient.id))
+        self.assertEqual(payload["receiver_id"], str(self.midwife_user.id))
+
+    @patch("channels.layers.InMemoryChannelLayer.group_send")
+    def test_exactly_one_call_offer_dispatched(self, mock_group_send):
+        # Test 8: group_send with action == "call_offer" happens exactly once
+        VoiceCallService.start_call(self.consultation, self.patient)
+
+        offer_calls = [
+            call_args for call_args in mock_group_send.call_args_list
+            if isinstance(call_args[0][1], dict) and call_args[0][1].get("action") == "call_offer"
+        ]
+        self.assertEqual(len(offer_calls), 1)
+
+    async def test_user_call_consumer_receives_and_delivers_call_offer(self):
+        # Test 4: Consumer receives call_signal and sends text frame
+        communicator = WebsocketCommunicator(UserCallConsumer.as_asgi(), "/ws/user-calls/")
+        communicator.scope["user"] = self.midwife_user
+
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        from channels.layers import get_channel_layer
+        channel_layer = get_channel_layer()
+
+        test_event = {
+            "type": "call_signal",
+            "action": "call_offer",
+            "event": "VOICE_SESSION_CREATED",
+            "call_id": "VOICE-TEST123456",
+            "consultation_id": str(self.consultation.id),
+            "caller_id": str(self.patient.id),
+            "receiver_id": str(self.midwife_user.id),
+            "caller_name": "Test Caller",
+            "call_type": "VOICE"
+        }
+
+        await channel_layer.group_send(f"user_calls_{self.midwife_user.id}", test_event)
+
+        response = await communicator.receive_json_from()
+        self.assertEqual(response["action"], "call_offer")
+        self.assertEqual(response["event"], "VOICE_SESSION_CREATED")
+        self.assertEqual(response["call_id"], "VOICE-TEST123456")
+        self.assertEqual(response["caller_id"], str(self.patient.id))
+
+        await communicator.disconnect()
+
+    @patch("channels.layers.InMemoryChannelLayer.group_send")
+    def test_decline_and_end_signal_dispatched_to_user_calls(self, mock_group_send):
+        # Test 5 & 6: Decline and End signals reach target recipient
+        VoiceCallService.start_call(self.consultation, self.patient)
+        mock_group_send.reset_mock()
+
+        # Decline active call
+        VoiceCallService.decline_call(self.consultation, self.midwife_user)
+        decline_calls = [
+            call_args for call_args in mock_group_send.call_args_list
+            if call_args[0][0] == f"user_calls_{self.patient.id}"
+        ]
+        self.assertTrue(len(decline_calls) >= 1)
+        self.assertEqual(decline_calls[0][0][1]["action"], "call_declined")
+
+        # Start a new call for testing end_call
+        VoiceSession.objects.filter(consultation=self.consultation).update(status=VoiceSession.VoiceSessionStatus.ENDED)
+        VoiceCallService.start_call(self.consultation, self.patient)
+        mock_group_send.reset_mock()
+
+        # End active call
+        VoiceCallService.end_call(self.consultation, self.patient)
+        end_calls = [
+            call_args for call_args in mock_group_send.call_args_list
+            if call_args[0][0] == f"user_calls_{self.midwife_user.id}"
+        ]
+        self.assertTrue(len(end_calls) >= 1)
+        self.assertEqual(end_calls[0][0][1]["action"], "call_ended")
+
+    @patch("apps.notifications.call_notifications._firebase_initialized", False)
+    @patch("channels.layers.InMemoryChannelLayer.group_send")
+    def test_firebase_uninitialized_does_not_prevent_ws_call_offer(self, mock_group_send):
+        # Test 7: Firebase failure/skipped state DOES NOT prevent WS offer
+        res = VoiceCallService.start_call(self.consultation, self.patient)
+        self.assertEqual(res["status"], "RINGING")
+
+        offer_calls = [
+            call_args for call_args in mock_group_send.call_args_list
+            if call_args[0][0] == f"user_calls_{self.midwife_user.id}"
+        ]
+        self.assertEqual(len(offer_calls), 1)
+
+    def test_self_call_rejected_before_session_creation(self):
+        # Attempt to call self (consultation user == midwife user)
+        patient_midwife_profile = MidwifeProfile.objects.create(
+            user=self.patient,
+            license_number="MID-PATIENT-999"
+        )
+        self_appointment = Appointment.objects.create(
+            user=self.patient,
+            midwife=patient_midwife_profile,
+            appointment_type="VIRTUAL_VOICE",
+            status=Appointment.AppointmentStatus.CONFIRMED,
+            scheduled_date="2026-08-30",
+            start_time="10:00:00",
+            end_time="11:00:00",
+            created_by=self.patient,
+        )
+        same_user_consultation = Consultation.objects.create(
+            appointment=self_appointment,
+            user=self.patient,
+            midwife=patient_midwife_profile,
+            status=Consultation.ConsultationStatus.SCHEDULED
+        )
+        with self.assertRaises(ValidationError):
+            VoiceCallService.start_call(same_user_consultation, self.patient)
+
+        # Verify no VoiceSession was created
+        self.assertFalse(VoiceSession.objects.filter(consultation=same_user_consultation).exists())
+
+    @patch("apps.notifications.call_notifications._firebase_initialized", False)
+    def test_a_firebase_credentials_missing_does_not_crash_voice_session(self):
+        # Test A: Firebase missing/unavailable does not crash VoiceSession creation
+        res = VoiceCallService.start_call(self.consultation, self.patient)
+        self.assertEqual(res["status"], "RINGING")
+        session = VoiceSession.objects.get(session_key=res["session_key"])
+        self.assertEqual(session.status, VoiceSession.VoiceSessionStatus.RINGING)
+
+    def test_b_firebase_initialization_succeeds_with_project_id(self):
+        # Test B: Mock Firebase Admin initialization succeeds with project ID
+        sample_creds = {
+            "type": "service_account",
+            "project_id": "cagh-bd916",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBg...\n-----END PRIVATE KEY-----\n",
+            "client_email": "test@cagh-bd916.iam.gserviceaccount.com"
+        }
+        json_str = json.dumps(sample_creds)
+        with patch("firebase_admin.initialize_app") as mock_init, \
+             patch("firebase_admin.credentials.Certificate") as mock_cert, \
+             patch.dict("os.environ", {"FIREBASE_SERVICE_ACCOUNT_KEY": json_str}), \
+             patch("firebase_admin._apps", {}):
+            mock_app = MagicMock(project_id="cagh-bd916")
+            mock_init.return_value = mock_app
+            app = init_firebase_admin()
+            self.assertIsNotNone(app)
+            self.assertEqual(getattr(app, "project_id", None), "cagh-bd916")
+
+    @patch("apps.notifications.call_notifications._firebase_initialized", True)
+    @patch("firebase_admin.messaging.send_each_for_multicast")
+    def test_c_fcm_send_succeeds_multicast(self, mock_send):
+        # Test C: FCM send succeeds, mock multicast response with success_count=1
+        mock_response = MagicMock()
+        mock_response.success_count = 1
+        mock_response.failure_count = 0
+        mock_response.responses = []
+        mock_send.return_value = mock_response
+
+        res = send_call_offer_push(
+            caller=self.patient,
+            recipient=self.midwife_user,
+            consultation=self.consultation,
+            call_type="VOICE",
+            session_key="VOICE-TEST-FCM-123",
+        )
+        self.assertIsNotNone(res)
+        self.assertEqual(res.success_count, 1)
+
+    @patch("apps.notifications.call_notifications._firebase_initialized", True)
+    @patch("firebase_admin.messaging.send_each_for_multicast")
+    def test_d_firebase_send_failure_logged_safely(self, mock_send):
+        # Test D: FCM send failure logged safely without breaking WS call flow
+        mock_send.side_effect = Exception("FCM Transport Unavailable")
+
+        # WS call offer dispatch must still succeed even when FCM throws exception
+        start_res = VoiceCallService.start_call(self.consultation, self.patient)
+        self.assertEqual(start_res["status"], "RINGING")
+
+    def test_e_existing_firebase_app_reused_without_duplicate_app_error(self):
+        # Test E: Existing initialized [DEFAULT] Firebase app reused without duplicate error
+        mock_app = MagicMock(project_id="cagh-bd916")
+        with patch("firebase_admin._apps", {"[DEFAULT]": mock_app}), \
+             patch("firebase_admin.get_app", return_value=mock_app):
+            app = init_firebase_admin()
+            self.assertEqual(app, mock_app)
+
+    def test_f_escaped_private_key_normalized(self):
+        # Test F: Escaped \n in private_key string normalized to real \n newlines
+        from apps.notifications.call_notifications import normalize_firebase_credentials
+        raw_creds = {
+            "type": "service_account",
+            "project_id": "cagh-bd916",
+            "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvgIBADANBgk...\\n-----END PRIVATE KEY-----\\n"
+        }
+        normalized = normalize_firebase_credentials(raw_creds)
+        self.assertIn("\n", normalized["private_key"])
+        self.assertNotIn("\\n", normalized["private_key"])
+
+

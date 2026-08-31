@@ -12,6 +12,19 @@ logger = logging.getLogger(__name__)
 _firebase_initialized = False
 
 
+def normalize_firebase_credentials(data):
+    """
+    Normalizes Firebase credentials dictionary.
+    Replaces literal escaped '\\n' strings in private_key with actual newline characters.
+    """
+    if isinstance(data, dict):
+        data_copy = dict(data)
+        if 'private_key' in data_copy and isinstance(data_copy['private_key'], str):
+            data_copy['private_key'] = data_copy['private_key'].replace('\\n', '\n')
+        return data_copy
+    return data
+
+
 def init_firebase_admin():
     """
     Initializes Firebase Admin SDK using service account credentials.
@@ -26,21 +39,22 @@ def init_firebase_admin():
     runtime OAuth failure errors on non-GCP environments like Render.
     """
     global _firebase_initialized
+    logger.info("[FIREBASE] initialization_started")
     try:
         import firebase_admin
         from firebase_admin import credentials, messaging
 
         if firebase_admin._apps and '[DEFAULT]' in firebase_admin._apps:
             app = firebase_admin.get_app()
-            if getattr(app, 'project_id', None):
-                _firebase_initialized = True
-                return app
-            try:
-                firebase_admin.delete_app(app)
-            except Exception:
-                pass
+            pid = getattr(app, 'project_id', None) or 'cagh-bd916'
+            _firebase_initialized = True
+            logger.info("[FIREBASE] credentials_present=true")
+            logger.info(f"[FIREBASE] initialization_success project_id={pid}")
+            return app
 
         env_raw = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY') or os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON') or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None)
+        credentials_present = bool(env_raw or os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
+        logger.info(f"[FIREBASE] credentials_present={str(credentials_present).lower()}")
 
         # 1. Direct JSON string or Base64 encoded JSON string
         if env_raw:
@@ -48,27 +62,27 @@ def init_firebase_admin():
             # Try raw JSON
             if env_str.startswith('{'):
                 try:
-                    data = json.loads(env_str)
+                    data = normalize_firebase_credentials(json.loads(env_str))
                     pid = data.get('project_id', 'cagh-bd916')
                     cred = credentials.Certificate(data)
                     app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                     _firebase_initialized = True
-                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from raw JSON env var (project_id={pid}).')
+                    logger.info(f"[FIREBASE] initialization_success project_id={pid}")
                     return app
                 except Exception as je:
-                    logger.warning(f'[FIREBASE ADMIN] Failed parsing raw JSON env var: {je}')
+                    logger.warning(f"[FIREBASE ADMIN] Failed parsing raw JSON env var: {je}")
 
             # Try Base64 encoded JSON
             try:
                 decoded_bytes = base64.b64decode(env_str)
                 decoded_str = decoded_bytes.decode('utf-8').strip()
                 if decoded_str.startswith('{'):
-                    data = json.loads(decoded_str)
+                    data = normalize_firebase_credentials(json.loads(decoded_str))
                     pid = data.get('project_id', 'cagh-bd916')
                     cred = credentials.Certificate(data)
                     app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                     _firebase_initialized = True
-                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from Base64 JSON env var (project_id={pid}).')
+                    logger.info(f"[FIREBASE] initialization_success project_id={pid}")
                     return app
             except Exception:
                 pass
@@ -85,19 +99,20 @@ def init_firebase_admin():
 
         if gac_path and os.path.exists(gac_path):
             try:
-                cred = credentials.Certificate(gac_path)
                 pid = 'cagh-bd916'
                 try:
                     with open(gac_path, 'r', encoding='utf-8') as f:
-                        pid = json.load(f).get('project_id', pid)
+                        file_data = normalize_firebase_credentials(json.load(f))
+                        pid = file_data.get('project_id', pid)
+                        cred = credentials.Certificate(file_data)
                 except Exception:
-                    pass
+                    cred = credentials.Certificate(gac_path)
                 app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                 _firebase_initialized = True
-                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from key file {gac_path} (project_id={pid}).')
+                logger.info(f"[FIREBASE] initialization_success project_id={pid}")
                 return app
             except Exception as fe:
-                logger.warning(f'[FIREBASE ADMIN] Failed loading key file {gac_path}: {fe}')
+                logger.warning(f"[FIREBASE ADMIN] Failed loading key file {gac_path}: {fe}")
 
         # 3. Local candidate key file paths
         backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -113,16 +128,17 @@ def init_firebase_admin():
                     pid = 'cagh-bd916'
                     try:
                         with open(p, 'r', encoding='utf-8') as f:
-                            pid = json.load(f).get('project_id', pid)
+                            file_data = normalize_firebase_credentials(json.load(f))
+                            pid = file_data.get('project_id', pid)
+                            cred = credentials.Certificate(file_data)
                     except Exception:
-                        pass
-                    cred = credentials.Certificate(p)
+                        cred = credentials.Certificate(p)
                     app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                     _firebase_initialized = True
-                    logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized from candidate file: {p} (project_id={pid}).')
+                    logger.info(f"[FIREBASE] initialization_success project_id={pid}")
                     return app
             except Exception as pe:
-                logger.warning(f'[FIREBASE ADMIN] Error loading candidate key file {p}: {pe}')
+                logger.warning(f"[FIREBASE ADMIN] Error loading candidate key file {p}: {pe}")
 
         # 4. ADC (Only if explicitly enabled via FIREBASE_USE_ADC env var)
         if os.getenv('FIREBASE_USE_ADC', '').lower() == 'true':
@@ -131,17 +147,17 @@ def init_firebase_admin():
                 pid = os.getenv('FIREBASE_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT') or 'cagh-bd916'
                 app = firebase_admin.initialize_app(cred, options={'projectId': pid})
                 _firebase_initialized = True
-                logger.info(f'[FIREBASE ADMIN] Firebase Admin initialized with Application Default Credentials (project_id={pid}).')
+                logger.info(f"[FIREBASE] initialization_success project_id={pid}")
                 return app
             except Exception as adce:
-                logger.warning(f'[FIREBASE ADMIN] ADC initialization failed: {adce}')
+                logger.warning(f"[FIREBASE ADMIN] ADC initialization failed: {adce}")
 
         _firebase_initialized = False
-        logger.error('[FIREBASE ADMIN ERROR] Firebase credentials unavailable. FCM push delivery disabled. Please set FIREBASE_SERVICE_ACCOUNT_KEY or GOOGLE_APPLICATION_CREDENTIALS.')
+        logger.error("[FIREBASE] initialization_failed error=credentials_unavailable")
         return None
     except Exception as e:
         _firebase_initialized = False
-        logger.error(f'[FIREBASE ADMIN ERROR] Firebase initialization exception: {e}')
+        logger.error(f"[FIREBASE] initialization_failed error={e}")
         return None
 
 
@@ -160,6 +176,11 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
 
     if not recipient or not recipient_id or caller_id == recipient_id:
         logger.info(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=recipient_missing_or_self caller_id={caller_id} receiver_id={recipient_id}")
+        return None
+
+    fb_app = init_firebase_admin()
+    if not fb_app:
+        logger.warning(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=firebase_not_initialized receiver={recipient_id}")
         return None
 
     caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
@@ -188,9 +209,10 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
         "timestamp": str(int(time.time())),
     }
 
-    tokens = list(
+    raw_tokens = list(
         DeviceToken.objects.filter(user=recipient, is_active=True).values_list('token', flat=True)
     )
+    tokens = list(dict.fromkeys([t.strip() for t in raw_tokens if t and t.strip()]))
 
     if not tokens:
         logger.info(f"[CALL] call_id={session_key} event=FCM_NO_TOKENS receiver={recipient_id}")
@@ -198,56 +220,49 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
 
     logger.info(f"[CALL] call_id={session_key} event=FCM_DISPATCHING caller={caller_id} receiver={recipient_id} token_count={len(tokens)}")
 
-    if _firebase_initialized:
-        try:
-            from firebase_admin import messaging
-            str_payload = {k: str(v) for k, v in call_payload.items()}
-            message = messaging.MulticastMessage(
-                tokens=tokens,
-                data=str_payload,  # DATA-ONLY: No notification= block!
-                android=messaging.AndroidConfig(
-                    priority='high',
-                    ttl=30,
-                ),
-                apns=messaging.APNSConfig(
-                    headers={
-                        'apns-priority': '10',
-                        'apns-push-type': 'background',
-                    },
-                    payload=messaging.APNSPayload(
-                        aps=messaging.Aps(
-                            content_available=True,
-                        ),
+    try:
+        from firebase_admin import messaging
+        str_payload = {k: str(v) for k, v in call_payload.items()}
+        message = messaging.MulticastMessage(
+            tokens=tokens,
+            data=str_payload,  # DATA-ONLY: No notification= block!
+            android=messaging.AndroidConfig(
+                priority='high',
+                ttl=30,
+            ),
+            apns=messaging.APNSConfig(
+                headers={
+                    'apns-priority': '10',
+                    'apns-push-type': 'background',
+                },
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        content_available=True,
                     ),
                 ),
-            )
-            fb_app = init_firebase_admin()
-            if not fb_app:
-                logger.error(f"[CALL] call_id={session_key} event=FCM_SEND_FAILED error=firebase_app_null")
-                return None
+            ),
+        )
 
-            if hasattr(messaging, 'send_each_for_multicast'):
-                response = messaging.send_each_for_multicast(message, app=fb_app)
-            else:
-                response = messaging.send_multicast(message, app=fb_app)
+        if hasattr(messaging, 'send_each_for_multicast'):
+            response = messaging.send_each_for_multicast(message, app=fb_app)
+        else:
+            response = messaging.send_multicast(message, app=fb_app)
 
+        if response.failure_count > 0:
+            logger.info(f"[CALL] call_id={session_key} event=FCM_PARTIAL_FAILURE receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
+            for idx, resp in enumerate(response.responses):
+                if not resp.success and resp.exception:
+                    err_code = str(resp.exception)
+                    if 'Unregistered' in err_code or 'InvalidArgument' in err_code:
+                        stale_token = tokens[idx]
+                        DeviceToken.objects.filter(token=stale_token).update(is_active=False)
+                        logger.info(f"[CALL] call_id={session_key} event=FCM_TOKEN_DEACTIVATED receiver={recipient_id}")
+        else:
             logger.info(f"[CALL] call_id={session_key} event=FCM_SENT receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
 
-            if response.failure_count > 0:
-                for idx, resp in enumerate(response.responses):
-                    if not resp.success and resp.exception:
-                        err_code = str(resp.exception)
-                        if 'Unregistered' in err_code or 'InvalidArgument' in err_code:
-                            stale_token = tokens[idx]
-                            DeviceToken.objects.filter(token=stale_token).update(is_active=False)
-                            logger.info(f"[CALL] call_id={session_key} event=FCM_TOKEN_DEACTIVATED receiver={recipient_id}")
-
-            return response
-        except Exception as fe:
-            logger.error(f"[CALL] call_id={session_key} event=FCM_SEND_FAILED receiver={recipient_id} error={fe}")
-            return None
-    else:
-        logger.warning(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=firebase_not_initialized receiver={recipient_id}")
+        return response
+    except Exception as fe:
+        logger.error(f"[CALL] call_id={session_key} event=FCM_SEND_FAILED receiver={recipient_id} error={fe}")
         return None
 
 

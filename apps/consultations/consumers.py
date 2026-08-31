@@ -433,11 +433,49 @@ class UserCallConsumer(AsyncWebsocketConsumer):
             pass
 
     async def broadcast_user_incoming_call(self, event):
+        data = event.get('data', {}) if 'data' in event else event
+        await self._deliver_user_call_signal(data)
+
+    async def call_signal(self, event):
+        data = event.get('data', {}) if 'data' in event else event
+        await self._deliver_user_call_signal(data)
+
+    async def _deliver_user_call_signal(self, data):
         user = self.scope.get('user')
-        data = event.get('data', {})
-        sender_id = str(data.get('sender_id', ''))
-        if user and sender_id and sender_id == str(user.id):
+        sender_id = str(data.get('caller_id') or data.get('sender_id') or '')
+        user_id_str = str(getattr(user, 'id', ''))
+        if user and sender_id and sender_id == user_id_str:
             return  # Strictly ignore self-call notification
-        await self.send(text_data=json.dumps(data))
+
+        action = data.get('action') or data.get('type') or 'call_offer'
+        call_id = data.get('call_id') or data.get('session_id') or data.get('session_key') or ''
+
+        logger.info(f"[WS] event=CALL_SIGNAL_DELIVERED user={user_id_str} action={action} call_id={call_id}")
+
+        payload = {
+            "action": action,
+            "event": data.get("event", action),
+            "call_id": call_id,
+            "session_id": call_id,
+            "session_key": call_id,
+            "consultation_id": str(data.get("consultation_id", "")),
+            "appointment_id": str(data.get("appointment_id", "")),
+            "caller_id": sender_id,
+            "receiver_id": str(data.get("receiver_id") or data.get("recipient_id") or user_id_str),
+            "recipient_id": str(data.get("recipient_id") or data.get("receiver_id") or user_id_str),
+            "caller_name": data.get("caller_name") or data.get("sender_name") or "Caller",
+            "receiver_name": data.get("receiver_name") or data.get("recipient_name") or "",
+            "recipient_name": data.get("recipient_name") or data.get("receiver_name") or "",
+            "call_type": data.get("call_type", "VOICE"),
+            "agora_channel_name": data.get("agora_channel_name") or "",
+            "agora_app_id": data.get("agora_app_id") or "",
+            "timestamp": data.get("timestamp") or str(int(timezone.now().timestamp())),
+        }
+        if "status" in data:
+            payload["status"] = data["status"]
+        if "ended_at" in data:
+            payload["ended_at"] = data["ended_at"]
+
+        await self.send(text_data=json.dumps(payload))
 
 
