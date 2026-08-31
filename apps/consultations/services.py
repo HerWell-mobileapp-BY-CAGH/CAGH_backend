@@ -164,13 +164,14 @@ class VoiceCallService:
             if recipient_id and recipient_id != user_id_str:
                 ws_payload['receiver_id'] = recipient_id
                 ws_payload['recipient_id'] = recipient_id
+                signal_data = dict(ws_payload)
+                signal_data['type'] = 'call_signal'
+                signal_data['action'] = event_name
+                signal_data['event'] = event_name
+                signal_data['data'] = ws_payload
                 async_to_sync(channel_layer.group_send)(
                     f"user_calls_{recipient_id}",
-                    {
-                        'type': 'call_signal',
-                        'data': ws_payload,
-                        **ws_payload
-                    }
+                    signal_data
                 )
                 logger.info(f"[CALL] call_id={getattr(session, 'session_key', None)} event=WS_USER_SIGNAL_SENT recipient={recipient_id} action={event_name}")
         except Exception as e:

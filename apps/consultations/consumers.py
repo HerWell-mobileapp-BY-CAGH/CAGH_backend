@@ -433,22 +433,43 @@ class UserCallConsumer(AsyncWebsocketConsumer):
             pass
 
     async def broadcast_user_incoming_call(self, event):
-        data = event.get('data', {}) if 'data' in event else event
-        await self._deliver_user_call_signal(data)
+        await self._deliver_user_call_signal(event)
 
     async def call_signal(self, event):
-        data = event.get('data', {}) if 'data' in event else event
-        await self._deliver_user_call_signal(data)
+        await self._deliver_user_call_signal(event)
 
-    async def _deliver_user_call_signal(self, data):
+    async def call_declined(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_ended(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_cancelled(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_accepted(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_offer(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def incoming_call(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def _deliver_user_call_signal(self, data_or_event):
+        if not isinstance(data_or_event, dict):
+            return
+
+        data = data_or_event.get('data') if isinstance(data_or_event.get('data'), dict) else data_or_event
+
         user = self.scope.get('user')
-        sender_id = str(data.get('caller_id') or data.get('sender_id') or '')
+        sender_id = str(data.get('caller_id') or data.get('sender_id') or data_or_event.get('sender_id') or '')
         user_id_str = str(getattr(user, 'id', ''))
         if user and sender_id and sender_id == user_id_str:
             return  # Strictly ignore self-call notification
 
-        action = data.get('action') or data.get('type') or 'call_offer'
-        call_id = data.get('call_id') or data.get('session_id') or data.get('session_key') or ''
+        action = data.get('action') or data.get('type') or data_or_event.get('action') or data_or_event.get('type') or 'call_offer'
+        call_id = data.get('call_id') or data.get('session_id') or data.get('session_key') or data_or_event.get('call_id') or ''
 
         logger.info(f"[WS] event=CALL_SIGNAL_DELIVERED user={user_id_str} action={action} call_id={call_id}")
 
@@ -458,8 +479,8 @@ class UserCallConsumer(AsyncWebsocketConsumer):
             "call_id": call_id,
             "session_id": call_id,
             "session_key": call_id,
-            "consultation_id": str(data.get("consultation_id", "")),
-            "appointment_id": str(data.get("appointment_id", "")),
+            "consultation_id": str(data.get("consultation_id", "") or data_or_event.get("consultation_id", "")),
+            "appointment_id": str(data.get("appointment_id", "") or data_or_event.get("appointment_id", "")),
             "caller_id": sender_id,
             "receiver_id": str(data.get("receiver_id") or data.get("recipient_id") or user_id_str),
             "recipient_id": str(data.get("recipient_id") or data.get("receiver_id") or user_id_str),
@@ -471,10 +492,10 @@ class UserCallConsumer(AsyncWebsocketConsumer):
             "agora_app_id": data.get("agora_app_id") or "",
             "timestamp": data.get("timestamp") or str(int(timezone.now().timestamp())),
         }
-        if "status" in data:
-            payload["status"] = data["status"]
-        if "ended_at" in data:
-            payload["ended_at"] = data["ended_at"]
+        if "status" in data or "status" in data_or_event:
+            payload["status"] = data.get("status") or data_or_event.get("status")
+        if "ended_at" in data or "ended_at" in data_or_event:
+            payload["ended_at"] = data.get("ended_at") or data_or_event.get("ended_at")
 
         await self.send(text_data=json.dumps(payload))
 

@@ -12,25 +12,49 @@ logger = logging.getLogger(__name__)
 _firebase_initialized = False
 
 
+def validate_firebase_credentials(data):
+    """
+    Validates mandatory Firebase service account JSON schema fields.
+    Normalizes escaped '\\n' in private_key into actual newline characters.
+    Returns (is_valid, reason, normalized_data)
+    """
+    if not isinstance(data, dict):
+        return False, "invalid_json_type", None
+
+    data_copy = dict(data)
+    if 'token_uri' not in data_copy or not data_copy['token_uri']:
+        data_copy['token_uri'] = "https://oauth2.googleapis.com/token"
+
+    required_fields = ['type', 'project_id', 'private_key', 'client_email', 'token_uri']
+    missing = [f for f in required_fields if not data_copy.get(f)]
+    if missing:
+        return False, f"missing_required_fields_{','.join(missing)}", None
+
+    pk = data_copy.get('private_key', '')
+    if isinstance(pk, str):
+        pk = pk.replace('\\n', '\n')
+        data_copy['private_key'] = pk
+
+    if '-----BEGIN PRIVATE KEY-----' not in pk or '-----END PRIVATE KEY-----' not in pk:
+        return False, "invalid_private_key_pem_format", None
+
+    return True, "valid", data_copy
+
+
 def normalize_firebase_credentials(data):
     """
-    Normalizes Firebase credentials dictionary.
-    Replaces literal escaped '\\n' strings in private_key with actual newline characters.
+    Helper function for backward compatibility credential normalization.
     """
-    if isinstance(data, dict):
-        data_copy = dict(data)
-        if 'private_key' in data_copy and isinstance(data_copy['private_key'], str):
-            data_copy['private_key'] = data_copy['private_key'].replace('\\n', '\n')
-        return data_copy
-    return data
+    _, _, normalized = validate_firebase_credentials(data)
+    return normalized if normalized else data
 
 
 def init_firebase_admin():
     """
     Initializes Firebase Admin SDK using service account credentials.
     Supports:
-    1. FIREBASE_SERVICE_ACCOUNT_KEY env var / Django setting as raw JSON string.
-    2. FIREBASE_SERVICE_ACCOUNT_KEY as Base64-encoded JSON string.
+    1. FIREBASE_SERVICE_ACCOUNT_KEY env var / Django setting as raw JSON, base64, or file path.
+    2. FIREBASE_SERVICE_ACCOUNT_JSON env var.
     3. GOOGLE_APPLICATION_CREDENTIALS or file path to JSON credential file.
     4. Local candidate service-account JSON file paths.
 
@@ -44,116 +68,176 @@ def init_firebase_admin():
         import firebase_admin
         from firebase_admin import credentials, messaging
 
+        env_key_raw = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY')
+        env_json_raw = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+        gac_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+
+        has_explicit_env = bool(env_key_raw or env_json_raw)
+        env_key = env_key_raw or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None)
+
+        credentials_present = bool(env_key or env_json_raw or gac_path)
+        logger.info(f"[FIREBASE] credentials_present={str(credentials_present).lower()}")
+
+        # If no explicit env var is overriding, and existing default app is present:
+        if not has_explicit_env and firebase_admin._apps and '[DEFAULT]' in firebase_admin._apps:
+            app = firebase_admin.get_app()
+            pid = getattr(app, 'project_id', None) or 'cagh-bd916'
+            _firebase_initialized = True
+            logger.info("[FIREBASE] credential_source=existing_app")
+            logger.info("[FIREBASE] credential_parse_success=true")
+            logger.info(f"[FIREBASE] initialization_success project_id={pid}")
+            return app
+
+        parsed_data = None
+        source_name = None
+        format_name = None
+
+        # 1. Direct FIREBASE_SERVICE_ACCOUNT_KEY
+        if env_key:
+            env_str = str(env_key).strip()
+            if env_str.startswith('{'):
+                source_name = "FIREBASE_SERVICE_ACCOUNT_KEY"
+                format_name = "raw_json"
+                try:
+                    raw_dict = json.loads(env_str)
+                    is_valid, reason, parsed_data = validate_firebase_credentials(raw_dict)
+                    if not is_valid:
+                        logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason={reason}")
+                        parsed_data = None
+                except Exception as je:
+                    logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason=invalid_json error={je}")
+
+            if not parsed_data:
+                try:
+                    decoded_str = base64.b64decode(env_str).decode('utf-8').strip()
+                    if decoded_str.startswith('{'):
+                        source_name = "FIREBASE_SERVICE_ACCOUNT_KEY"
+                        format_name = "base64_json"
+                        raw_dict = json.loads(decoded_str)
+                        is_valid, reason, parsed_data = validate_firebase_credentials(raw_dict)
+                        if not is_valid:
+                            logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason={reason}")
+                            parsed_data = None
+                except Exception:
+                    pass
+
+            if not parsed_data and os.path.exists(env_str):
+                source_name = "FIREBASE_SERVICE_ACCOUNT_KEY"
+                format_name = "file_path"
+                try:
+                    with open(env_str, 'r', encoding='utf-8') as f:
+                        raw_dict = json.load(f)
+                        is_valid, reason, parsed_data = validate_firebase_credentials(raw_dict)
+                        if not is_valid:
+                            logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason={reason}")
+                            parsed_data = None
+                except Exception as fe:
+                    logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason=file_read_error error={fe}")
+
+        # 2. FIREBASE_SERVICE_ACCOUNT_JSON
+        if not parsed_data and env_json_raw:
+            env_str = str(env_json_raw).strip()
+            if env_str.startswith('{'):
+                source_name = "FIREBASE_SERVICE_ACCOUNT_JSON"
+                format_name = "raw_json"
+                try:
+                    raw_dict = json.loads(env_str)
+                    is_valid, reason, parsed_data = validate_firebase_credentials(raw_dict)
+                    if not is_valid:
+                        logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason={reason}")
+                        parsed_data = None
+                except Exception as e:
+                    logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason=invalid_json error={e}")
+
+        # If explicit environment variable was passed but could NOT be parsed into valid credentials, fail immediately
+        if has_explicit_env and not parsed_data:
+            _firebase_initialized = False
+            logger.error("[FIREBASE] initialization_failed error=credentials_unavailable")
+            return None
+
+        # 3. GOOGLE_APPLICATION_CREDENTIALS
+        if not parsed_data and gac_path and os.path.exists(gac_path):
+            source_name = "GOOGLE_APPLICATION_CREDENTIALS"
+            format_name = "file_path"
+            try:
+                with open(gac_path, 'r', encoding='utf-8') as f:
+                    raw_dict = json.load(f)
+                    is_valid, reason, parsed_data = validate_firebase_credentials(raw_dict)
+                    if not is_valid:
+                        logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason={reason}")
+                        parsed_data = None
+            except Exception as fe:
+                logger.warning(f"[FIREBASE] credential_parse_failed source={source_name} format={format_name} reason=file_read_error error={fe}")
+
+        # 4. Local candidate key file paths
+        if not parsed_data:
+            backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            candidate_paths = [
+                os.path.join(backend_root, 'firebase-service-account.json'),
+                os.path.join(backend_root, 'service-account.json'),
+                os.path.join(backend_root, 'config', 'firebase-service-account.json'),
+            ]
+
+            for p in candidate_paths:
+                if os.path.exists(p):
+                    source_name = "candidate_file"
+                    format_name = "file_path"
+                    try:
+                        with open(p, 'r', encoding='utf-8') as f:
+                            raw_dict = json.load(f)
+                            is_valid, reason, parsed_data = validate_firebase_credentials(raw_dict)
+                            if is_valid:
+                                break
+                    except Exception:
+                        pass
+
+        # 5. ADC (Only if explicitly enabled via FIREBASE_USE_ADC env var)
+        if not parsed_data and os.getenv('FIREBASE_USE_ADC', '').lower() == 'true':
+            try:
+                cred = credentials.ApplicationDefault()
+                pid = os.getenv('FIREBASE_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT') or 'cagh-bd916'
+                try:
+                    app = firebase_admin.initialize_app(cred, options={'projectId': pid})
+                except ValueError:
+                    app = firebase_admin.get_app()
+                _firebase_initialized = True
+                logger.info("[FIREBASE] credential_source=FIREBASE_USE_ADC")
+                logger.info("[FIREBASE] credential_format=application_default")
+                logger.info("[FIREBASE] credential_parse_success=true")
+                logger.info(f"[FIREBASE] initialization_success project_id={pid}")
+                return app
+            except Exception as adce:
+                logger.warning(f"[FIREBASE] ADC initialization failed: {adce}")
+
+        if parsed_data:
+            pid = parsed_data.get('project_id', 'cagh-bd916')
+            cred = credentials.Certificate(parsed_data)
+            try:
+                app = firebase_admin.initialize_app(cred, options={'projectId': pid})
+            except ValueError:
+                app = firebase_admin.get_app()
+            _firebase_initialized = True
+            logger.info(f"[FIREBASE] credential_source={source_name}")
+            logger.info(f"[FIREBASE] credential_format={format_name}")
+            logger.info("[FIREBASE] credential_parse_success=true")
+            logger.info(f"[FIREBASE] initialization_success project_id={pid}")
+            return app
+
         if firebase_admin._apps and '[DEFAULT]' in firebase_admin._apps:
             app = firebase_admin.get_app()
             pid = getattr(app, 'project_id', None) or 'cagh-bd916'
             _firebase_initialized = True
-            logger.info("[FIREBASE] credentials_present=true")
+            logger.info("[FIREBASE] credential_source=existing_app")
+            logger.info("[FIREBASE] credential_parse_success=true")
             logger.info(f"[FIREBASE] initialization_success project_id={pid}")
             return app
 
-        env_raw = os.getenv('FIREBASE_SERVICE_ACCOUNT_KEY') or os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON') or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_KEY', None)
-        credentials_present = bool(env_raw or os.getenv('GOOGLE_APPLICATION_CREDENTIALS'))
-        logger.info(f"[FIREBASE] credentials_present={str(credentials_present).lower()}")
-
-        # 1. Direct JSON string or Base64 encoded JSON string
-        if env_raw:
-            env_str = str(env_raw).strip()
-            # Try raw JSON
-            if env_str.startswith('{'):
-                try:
-                    data = normalize_firebase_credentials(json.loads(env_str))
-                    pid = data.get('project_id', 'cagh-bd916')
-                    cred = credentials.Certificate(data)
-                    app = firebase_admin.initialize_app(cred, options={'projectId': pid})
-                    _firebase_initialized = True
-                    logger.info(f"[FIREBASE] initialization_success project_id={pid}")
-                    return app
-                except Exception as je:
-                    logger.warning(f"[FIREBASE ADMIN] Failed parsing raw JSON env var: {je}")
-
-            # Try Base64 encoded JSON
-            try:
-                decoded_bytes = base64.b64decode(env_str)
-                decoded_str = decoded_bytes.decode('utf-8').strip()
-                if decoded_str.startswith('{'):
-                    data = normalize_firebase_credentials(json.loads(decoded_str))
-                    pid = data.get('project_id', 'cagh-bd916')
-                    cred = credentials.Certificate(data)
-                    app = firebase_admin.initialize_app(cred, options={'projectId': pid})
-                    _firebase_initialized = True
-                    logger.info(f"[FIREBASE] initialization_success project_id={pid}")
-                    return app
-            except Exception:
-                pass
-
-        # 2. File path from GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_SERVICE_ACCOUNT_KEY
-        gac_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-        if not gac_path and env_raw:
-            candidate_path = str(env_raw).strip()
-            try:
-                if os.path.exists(candidate_path):
-                    gac_path = candidate_path
-            except Exception:
-                pass
-
-        if gac_path and os.path.exists(gac_path):
-            try:
-                pid = 'cagh-bd916'
-                try:
-                    with open(gac_path, 'r', encoding='utf-8') as f:
-                        file_data = normalize_firebase_credentials(json.load(f))
-                        pid = file_data.get('project_id', pid)
-                        cred = credentials.Certificate(file_data)
-                except Exception:
-                    cred = credentials.Certificate(gac_path)
-                app = firebase_admin.initialize_app(cred, options={'projectId': pid})
-                _firebase_initialized = True
-                logger.info(f"[FIREBASE] initialization_success project_id={pid}")
-                return app
-            except Exception as fe:
-                logger.warning(f"[FIREBASE ADMIN] Failed loading key file {gac_path}: {fe}")
-
-        # 3. Local candidate key file paths
-        backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        candidate_paths = [
-            os.path.join(backend_root, 'firebase-service-account.json'),
-            os.path.join(backend_root, 'service-account.json'),
-            os.path.join(backend_root, 'config', 'firebase-service-account.json'),
-        ]
-
-        for p in candidate_paths:
-            try:
-                if os.path.exists(p):
-                    pid = 'cagh-bd916'
-                    try:
-                        with open(p, 'r', encoding='utf-8') as f:
-                            file_data = normalize_firebase_credentials(json.load(f))
-                            pid = file_data.get('project_id', pid)
-                            cred = credentials.Certificate(file_data)
-                    except Exception:
-                        cred = credentials.Certificate(p)
-                    app = firebase_admin.initialize_app(cred, options={'projectId': pid})
-                    _firebase_initialized = True
-                    logger.info(f"[FIREBASE] initialization_success project_id={pid}")
-                    return app
-            except Exception as pe:
-                logger.warning(f"[FIREBASE ADMIN] Error loading candidate key file {p}: {pe}")
-
-        # 4. ADC (Only if explicitly enabled via FIREBASE_USE_ADC env var)
-        if os.getenv('FIREBASE_USE_ADC', '').lower() == 'true':
-            try:
-                cred = credentials.ApplicationDefault()
-                pid = os.getenv('FIREBASE_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT') or 'cagh-bd916'
-                app = firebase_admin.initialize_app(cred, options={'projectId': pid})
-                _firebase_initialized = True
-                logger.info(f"[FIREBASE] initialization_success project_id={pid}")
-                return app
-            except Exception as adce:
-                logger.warning(f"[FIREBASE ADMIN] ADC initialization failed: {adce}")
-
         _firebase_initialized = False
         logger.error("[FIREBASE] initialization_failed error=credentials_unavailable")
+        return None
+    except Exception as e:
+        _firebase_initialized = False
+        logger.error(f"[FIREBASE] initialization_failed error={e}")
         return None
     except Exception as e:
         _firebase_initialized = False
@@ -248,8 +332,14 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
         else:
             response = messaging.send_multicast(message, app=fb_app)
 
-        if response.failure_count > 0:
+        if response.failure_count > 0 and response.success_count > 0:
             logger.info(f"[CALL] call_id={session_key} event=FCM_PARTIAL_FAILURE receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
+        elif response.failure_count > 0 and response.success_count == 0:
+            logger.error(f"[CALL] call_id={session_key} event=FCM_FAILED receiver={recipient_id} success_count=0 failure_count={response.failure_count}")
+        else:
+            logger.info(f"[CALL] call_id={session_key} event=FCM_SENT receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
+
+        if response.failure_count > 0:
             for idx, resp in enumerate(response.responses):
                 if not resp.success and resp.exception:
                     err_code = str(resp.exception)
@@ -257,12 +347,10 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
                         stale_token = tokens[idx]
                         DeviceToken.objects.filter(token=stale_token).update(is_active=False)
                         logger.info(f"[CALL] call_id={session_key} event=FCM_TOKEN_DEACTIVATED receiver={recipient_id}")
-        else:
-            logger.info(f"[CALL] call_id={session_key} event=FCM_SENT receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
 
         return response
     except Exception as fe:
-        logger.error(f"[CALL] call_id={session_key} event=FCM_SEND_FAILED receiver={recipient_id} error={fe}")
+        logger.error(f"[CALL] call_id={session_key} event=FCM_FAILED receiver={recipient_id} error={fe}")
         return None
 
 

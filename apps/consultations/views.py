@@ -232,12 +232,14 @@ class ConsultationViewSet(viewsets.ModelViewSet):
                     recipient_id = consultation.midwife.user.id
 
             if recipient_id:
+                signal_data = dict(ws_payload)
+                signal_data['type'] = 'call_signal'
+                signal_data['action'] = event_name
+                signal_data['event'] = event_name
+                signal_data['data'] = ws_payload
                 async_to_sync(channel_layer.group_send)(
                     f"user_calls_{recipient_id}",
-                    {
-                        'type': 'broadcast_user_incoming_call',
-                        'data': ws_payload
-                    }
+                    signal_data
                 )
         except Exception as e:
             import logging

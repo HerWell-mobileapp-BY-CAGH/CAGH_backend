@@ -460,14 +460,109 @@ class VoiceCallBackendTestCase(APITestCase):
 
     def test_f_escaped_private_key_normalized(self):
         # Test F: Escaped \n in private_key string normalized to real \n newlines
-        from apps.notifications.call_notifications import normalize_firebase_credentials
+        from apps.notifications.call_notifications import validate_firebase_credentials
         raw_creds = {
             "type": "service_account",
             "project_id": "cagh-bd916",
-            "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvgIBADANBgk...\\n-----END PRIVATE KEY-----\\n"
+            "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvgIBADANBgk...\\n-----END PRIVATE KEY-----\\n",
+            "client_email": "test@cagh-bd916.iam.gserviceaccount.com",
+            "token_uri": "https://oauth2.googleapis.com/token"
         }
-        normalized = normalize_firebase_credentials(raw_creds)
+        is_valid, reason, normalized = validate_firebase_credentials(raw_creds)
+        self.assertTrue(is_valid)
         self.assertIn("\n", normalized["private_key"])
         self.assertNotIn("\\n", normalized["private_key"])
+
+    @patch("firebase_admin.get_app")
+    def test_g_invalid_json_fails_safely(self, mock_get_app):
+        # Test G: Invalid JSON string produces safe parse error without crashing
+        mock_get_app.side_effect = ValueError("No app exists")
+        with patch.dict("os.environ", {"FIREBASE_SERVICE_ACCOUNT_KEY": "{invalid_json_str"}), \
+             patch("firebase_admin._apps", {}), \
+             patch("apps.notifications.call_notifications._firebase_initialized", False):
+            app = init_firebase_admin()
+            self.assertIsNone(app)
+
+    @patch("firebase_admin.get_app")
+    def test_h_missing_required_fields_fails_safely(self, mock_get_app):
+        # Test H: Valid JSON missing required schema fields produces safe parse error
+        mock_get_app.side_effect = ValueError("No app exists")
+        incomplete_json = json.dumps({"type": "service_account", "project_id": "cagh-bd916"})
+        with patch.dict("os.environ", {"FIREBASE_SERVICE_ACCOUNT_KEY": incomplete_json}), \
+             patch("firebase_admin._apps", {}), \
+             patch("apps.notifications.call_notifications._firebase_initialized", False):
+            app = init_firebase_admin()
+            self.assertIsNone(app)
+
+    def test_i_base64_json_credentials_initialize(self):
+        # Test I: Base64-encoded JSON credentials initialize successfully
+        sample_creds = {
+            "type": "service_account",
+            "project_id": "cagh-bd916",
+            "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBg...\n-----END PRIVATE KEY-----\n",
+            "client_email": "test@cagh-bd916.iam.gserviceaccount.com",
+            "token_uri": "https://oauth2.googleapis.com/token"
+        }
+        b64_str = base64.b64encode(json.dumps(sample_creds).encode('utf-8')).decode('utf-8')
+        with patch("firebase_admin.initialize_app") as mock_init, \
+             patch("firebase_admin.credentials.Certificate") as mock_cert, \
+             patch.dict("os.environ", {"FIREBASE_SERVICE_ACCOUNT_KEY": b64_str}), \
+             patch("firebase_admin._apps", {}):
+            mock_app = MagicMock(project_id="cagh-bd916")
+            mock_init.return_value = mock_app
+            app = init_firebase_admin()
+            self.assertIsNotNone(app)
+
+    async def test_j_user_call_consumer_handles_call_declined_and_ended_without_crash(self):
+        # Test J: UserCallConsumer handles call_declined and call_ended events without ValueError missing handler
+        from channels.testing import WebsocketCommunicator
+        from apps.consultations.consumers import UserCallConsumer
+        from channels.layers import get_channel_layer
+
+        communicator = WebsocketCommunicator(UserCallConsumer.as_asgi(), "/ws/user-calls/")
+        communicator.scope["user"] = self.midwife_user
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        channel_layer = get_channel_layer()
+
+        # 1. Send canonical call_signal action=call_declined
+        await channel_layer.group_send(f"user_calls_{self.midwife_user.id}", {
+            "type": "call_signal",
+            "action": "call_declined",
+            "event": "call_declined",
+            "call_id": "VOICE-DECLINE123",
+            "consultation_id": str(self.consultation.id),
+            "caller_id": str(self.patient.id),
+        })
+        res1 = await communicator.receive_json_from()
+        self.assertEqual(res1["action"], "call_declined")
+
+        # 2. Send direct type=call_declined event (defensive fallback test)
+        await channel_layer.group_send(f"user_calls_{self.midwife_user.id}", {
+            "type": "call_declined",
+            "action": "call_declined",
+            "event": "call_declined",
+            "call_id": "VOICE-DECLINE456",
+            "consultation_id": str(self.consultation.id),
+            "caller_id": str(self.patient.id),
+        })
+        res2 = await communicator.receive_json_from()
+        self.assertEqual(res2["action"], "call_declined")
+
+        # 3. Send direct type=call_ended event (defensive fallback test)
+        await channel_layer.group_send(f"user_calls_{self.midwife_user.id}", {
+            "type": "call_ended",
+            "action": "call_ended",
+            "event": "call_ended",
+            "call_id": "VOICE-END789",
+            "consultation_id": str(self.consultation.id),
+            "caller_id": str(self.patient.id),
+        })
+        res3 = await communicator.receive_json_from()
+        self.assertEqual(res3["action"], "call_ended")
+
+        await communicator.disconnect()
+
 
 
