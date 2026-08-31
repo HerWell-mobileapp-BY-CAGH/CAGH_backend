@@ -1,4 +1,5 @@
 import uuid
+import logging
 from datetime import timedelta
 from django.db import models, transaction
 from django.utils import timezone
@@ -21,6 +22,8 @@ from .services import VoiceCallService
 from apps.appointments.models import Appointment
 from apps.notifications.models import Notification
 from apps.notifications.call_notifications import send_incoming_call_notification
+
+logger = logging.getLogger(__name__)
 
 
 RINGING_TIMEOUT_SECONDS = getattr(settings, 'VOICE_CALL_RINGING_TIMEOUT_SECONDS', 45)
@@ -308,6 +311,75 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_start(self, request, pk=None):
         return self.start(request, pk=pk)
 
+    def _execute_voice_action_logging(self, request, pk, action_name, service_method):
+        user = getattr(request, 'user', None)
+        user_id_str = str(getattr(user, 'id', 'anonymous'))
+        req_id = f"{action_name[:4].upper()}-{uuid.uuid4().hex[:6].upper()}"
+        client_source = 'HTTP'
+        if isinstance(request.data, dict):
+            client_source = request.data.get('source') or request.data.get('client_source') or 'HTTP'
+
+        logger.info(
+            f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=REQUEST_RECEIVED consultation_id={pk} user_id={user_id_str}"
+        )
+
+        if not user or not user.is_authenticated:
+            logger.warning(
+                f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=AUTH_FAILURE consultation_id={pk} user_id={user_id_str} status=401"
+            )
+            return Response({"detail": "Authentication credentials were not provided."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        logger.info(
+            f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=PROCESSING_STARTED consultation_id={pk} user_id={user_id_str}"
+        )
+
+        try:
+            consultation = self.get_object()
+        except PermissionDenied as pd:
+            logger.warning(
+                f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=AUTH_FAILURE consultation_id={pk} user_id={user_id_str} status=403 reason=permission_denied"
+            )
+            raise
+        except Exception as ex:
+            logger.error(
+                f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=ERROR consultation_id={pk} user_id={user_id_str} error_type={type(ex).__name__}"
+            )
+            raise
+
+        try:
+            data, code = service_method(consultation, user)
+            if code in [200, 201]:
+                logger.info(
+                    f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=SUCCESS consultation_id={pk} user_id={user_id_str} status={code}"
+                )
+            elif code == 409:
+                reason = "invalid_state"
+                if isinstance(data, dict):
+                    err_msg = data.get("error", "")
+                    if "status is" in err_msg:
+                        reason = err_msg.split("status is")[-1].strip().replace("'", "").replace(".", "")
+                    elif err_msg:
+                        reason = err_msg
+                logger.warning(
+                    f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=CONFLICT consultation_id={pk} user_id={user_id_str} status=409 reason={reason}"
+                )
+            else:
+                reason = data.get("error", "rejected") if isinstance(data, dict) else "rejected"
+                logger.warning(
+                    f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=REJECTED consultation_id={pk} user_id={user_id_str} status={code} reason={reason}"
+                )
+            return Response(data, status=code)
+        except PermissionDenied as pd:
+            logger.warning(
+                f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=AUTH_FAILURE consultation_id={pk} user_id={user_id_str} status=403 reason=permission_denied"
+            )
+            raise
+        except Exception as ex:
+            logger.error(
+                f"[CALL-ACTION] request_id={req_id} source={client_source} action={action_name} event=ERROR consultation_id={pk} user_id={user_id_str} error_type={type(ex).__name__}"
+            )
+            raise
+
     @extend_schema(
         summary="Accept Voice Call & Retrieve Signed Agora Token",
         tags=["Consultations"],
@@ -315,9 +387,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/accept')
     def voice_session_accept(self, request, pk=None):
-        consultation = self.get_object()
-        data, code = VoiceCallService.accept_call(consultation, request.user)
-        return Response(data, status=code)
+        return self._execute_voice_action_logging(request, pk, 'ACCEPT', VoiceCallService.accept_call)
 
     @extend_schema(
         summary="Mark Call ONGOING when Agora Audio Connects",
@@ -337,9 +407,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/decline')
     def voice_session_decline(self, request, pk=None):
-        consultation = self.get_object()
-        data, code = VoiceCallService.decline_call(consultation, request.user)
-        return Response(data, status=code)
+        return self._execute_voice_action_logging(request, pk, 'DECLINE', VoiceCallService.decline_call)
 
     @extend_schema(
         summary="Cancel Voice Call (Caller side)",
@@ -348,9 +416,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/cancel')
     def voice_session_cancel(self, request, pk=None):
-        consultation = self.get_object()
-        data, code = VoiceCallService.cancel_call(consultation, request.user)
-        return Response(data, status=code)
+        return self._execute_voice_action_logging(request, pk, 'CANCEL', VoiceCallService.cancel_call)
 
     @extend_schema(
         summary="Mark Voice Call as Missed (Ringing Timeout)",
@@ -370,9 +436,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=['post'], url_path='voice-session/end')
     def voice_session_end(self, request, pk=None):
-        consultation = self.get_object()
-        data, code = VoiceCallService.end_call(consultation, request.user)
-        return Response(data, status=code)
+        return self._execute_voice_action_logging(request, pk, 'END', VoiceCallService.end_call)
 
     @extend_schema(
         summary="Get authorized short-lived Agora Token for active call",
@@ -388,30 +452,28 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     @extend_schema(summary="Manage Virtual Voice Session status", tags=["Consultations"])
     @action(detail=True, methods=['get', 'post'], url_path='voice-session')
     def manage_voice_session(self, request, pk=None):
-        consultation = self.get_object()
         action_type = request.data.get('action', 'STATUS') if request.method == 'POST' else 'STATUS'
 
         if action_type == 'START':
             return self.start(request, pk=pk)
         elif action_type == 'ACCEPT':
-            data, code = VoiceCallService.accept_call(consultation, request.user)
-            return Response(data, status=code)
+            return self.voice_session_accept(request, pk=pk)
         elif action_type == 'CONNECT':
+            consultation = self.get_object()
             data, code = VoiceCallService.connect_call(consultation, request.user)
             return Response(data, status=code)
         elif action_type == 'DECLINE':
-            data, code = VoiceCallService.decline_call(consultation, request.user)
-            return Response(data, status=code)
+            return self.voice_session_decline(request, pk=pk)
         elif action_type == 'CANCEL':
-            data, code = VoiceCallService.cancel_call(consultation, request.user)
-            return Response(data, status=code)
+            return self.voice_session_cancel(request, pk=pk)
         elif action_type == 'MISSED':
+            consultation = self.get_object()
             data, code = VoiceCallService.missed_call(consultation, request.user)
             return Response(data, status=code)
         elif action_type == 'END':
-            data, code = VoiceCallService.end_call(consultation, request.user)
-            return Response(data, status=code)
+            return self.voice_session_end(request, pk=pk)
         else:
+            consultation = self.get_object()
             data, code = VoiceCallService.generate_agora_token(consultation, request.user)
             return Response(data, status=code)
 

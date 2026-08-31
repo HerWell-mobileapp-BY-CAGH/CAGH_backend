@@ -564,5 +564,56 @@ class VoiceCallBackendTestCase(APITestCase):
 
         await communicator.disconnect()
 
+    def test_k_diagnostic_call_action_logging(self):
+        # Test K: Verify [CALL-ACTION] diagnostic logging for Accept, Conflict, Auth failure, and State transitions
+        url_start = f"/api/v1/consultations/{self.consultation.id}/voice-session/start/"
+        self.client.force_authenticate(user=self.patient)
+        self.client.post(url_start)
+
+        url_accept = f"/api/v1/consultations/{self.consultation.id}/voice-session/accept/"
+        url_end = f"/api/v1/consultations/{self.consultation.id}/voice-session/end/"
+        self.client.force_authenticate(user=self.midwife_user)
+        with self.assertLogs("apps.consultations.views", level="INFO") as cm_views, \
+             self.assertLogs("apps.consultations.services", level="INFO") as cm_serv:
+            res_accept = self.client.post(url_accept, {"source": "HEADS_UP_NOTIFICATION"}, format="json")
+            self.assertEqual(res_accept.status_code, 200)
+
+            output_views = " ".join(cm_views.output)
+            self.assertIn("[CALL-ACTION]", output_views)
+            self.assertIn("action=ACCEPT", output_views)
+            self.assertIn("event=REQUEST_RECEIVED", output_views)
+            self.assertIn("source=HEADS_UP_NOTIFICATION", output_views)
+            self.assertIn("event=SUCCESS", output_views)
+
+            output_serv = " ".join(cm_serv.output)
+            self.assertIn("[CALL-ACTION]", output_serv)
+            self.assertIn("action=ACCEPT", output_serv)
+            self.assertIn("event=STATE_TRANSITION", output_serv)
+            self.assertIn("from=RINGING to=ACCEPTED", output_serv)
+
+        # End the accepted session to put it in terminal status
+        res_end = self.client.post(url_end)
+        self.assertEqual(res_end.status_code, 200)
+
+        # Attempting to accept an ENDED terminal call returns 409 CONFLICT
+        with self.assertLogs("apps.consultations.views", level="WARNING") as cm_conflict:
+            res_conflict = self.client.post(url_accept)
+            self.assertEqual(res_conflict.status_code, 409)
+            output_conflict = " ".join(cm_conflict.output)
+            self.assertIn("[CALL-ACTION]", output_conflict)
+            self.assertIn("action=ACCEPT", output_conflict)
+            self.assertIn("event=CONFLICT", output_conflict)
+
+        other_user = User.objects.create_user(username="unauth_participant", password="password123")
+        self.client.force_authenticate(user=other_user)
+        with self.assertLogs("apps.consultations.views", level="WARNING") as cm_auth:
+            res_unauth = self.client.post(url_accept)
+            self.assertEqual(res_unauth.status_code, 403)
+            output_auth = " ".join(cm_auth.output)
+            self.assertIn("[CALL-ACTION]", output_auth)
+            self.assertIn("action=ACCEPT", output_auth)
+            self.assertIn("event=AUTH_FAILURE", output_auth)
+
+
 
 

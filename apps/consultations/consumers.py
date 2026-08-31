@@ -471,6 +471,15 @@ class UserCallConsumer(AsyncWebsocketConsumer):
         action = data.get('action') or data.get('type') or data_or_event.get('action') or data_or_event.get('type') or 'call_offer'
         call_id = data.get('call_id') or data.get('session_id') or data.get('session_key') or data_or_event.get('call_id') or ''
 
+        action_log = action.upper()
+        if 'ACCEPT' in action_log:
+            action_log = 'ACCEPT'
+        elif 'DECLINE' in action_log or 'REJECT' in action_log:
+            action_log = 'DECLINE'
+        elif 'END' in action_log or 'CANCEL' in action_log:
+            action_log = 'END'
+
+        logger.info(f"[CALL-ACTION] source=WEBSOCKET action={action_log} event=SIGNAL_DELIVERED call_id={call_id} user_id={user_id_str}")
         logger.info(f"[WS] event=CALL_SIGNAL_DELIVERED user={user_id_str} action={action} call_id={call_id}")
 
         payload = {

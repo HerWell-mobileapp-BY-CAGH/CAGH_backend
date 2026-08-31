@@ -169,10 +169,21 @@ class VoiceCallService:
                 signal_data['action'] = event_name
                 signal_data['event'] = event_name
                 signal_data['data'] = ws_payload
+
+                action_log_name = action_type.upper()
+                if action_log_name in ['ACCEPTED', 'ACCEPT']:
+                    action_log_name = 'ACCEPT'
+                elif action_log_name in ['DECLINED', 'DECLINE']:
+                    action_log_name = 'DECLINE'
+                elif action_log_name in ['ENDED', 'END']:
+                    action_log_name = 'END'
+
+                logger.info(f"[CALL-ACTION] source=WEBSOCKET action={action_log_name} event=SIGNAL_DISPATCHING call_id={getattr(session, 'session_key', None)} recipient={recipient_id}")
                 async_to_sync(channel_layer.group_send)(
                     f"user_calls_{recipient_id}",
                     signal_data
                 )
+                logger.info(f"[CALL-ACTION] source=WEBSOCKET action={action_log_name} event=SIGNAL_DISPATCHED call_id={getattr(session, 'session_key', None)} recipient={recipient_id}")
                 logger.info(f"[CALL] call_id={getattr(session, 'session_key', None)} event=WS_USER_SIGNAL_SENT recipient={recipient_id} action={event_name}")
         except Exception as e:
             logger.error(f"[CALL] event=WS_BROADCAST_ERROR action={action_type} error={e}")
@@ -361,6 +372,7 @@ class VoiceCallService:
                 logger.warning(f"[CALL] call_id={session.session_key} event=ACCEPT_REJECTED status={session.status}")
                 return {"error": f"Cannot accept call. Call status is '{session.status}'."}, 409
 
+            old_status = session.status
             session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
             if not session.started_at:
                 session.started_at = timezone.now()
@@ -373,6 +385,7 @@ class VoiceCallService:
                 consultation.started_at = timezone.now()
             consultation.save()
 
+            logger.info(f"[CALL-ACTION] action=ACCEPT event=STATE_TRANSITION call_id={session.session_key} from={old_status} to={session.status} user_id={user.id}")
             logger.info(f"[CALL] call_id={session.session_key} event=CALL_ACCEPTED user_id={user.id}")
 
         if broadcast_ws:
@@ -445,9 +458,11 @@ class VoiceCallService:
             if session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
                 return {"error": f"Cannot decline call. Call status is '{session.status}'."}, 409
 
+            old_status = session.status
             session.status = VoiceSession.VoiceSessionStatus.DECLINED
             session.ended_at = timezone.now()
             session.save()
+            logger.info(f"[CALL-ACTION] action=DECLINE event=STATE_TRANSITION call_id={session.session_key} from={old_status} to={session.status} user_id={user.id}")
             logger.info(f"[CALL] call_id={session.session_key} event=CALL_DECLINED user_id={user.id}")
 
             if broadcast_ws:
@@ -473,9 +488,11 @@ class VoiceCallService:
             if session.status not in [VoiceSession.VoiceSessionStatus.RINGING, VoiceSession.VoiceSessionStatus.INITIATED]:
                 return {"error": f"Cannot cancel call. Call status is '{session.status}'."}, 409
 
+            old_status = session.status
             session.status = VoiceSession.VoiceSessionStatus.CANCELLED
             session.ended_at = timezone.now()
             session.save()
+            logger.info(f"[CALL-ACTION] action=CANCEL event=STATE_TRANSITION call_id={session.session_key} from={old_status} to={session.status} user_id={user.id}")
             logger.info(f"[CALL] call_id={session.session_key} event=CALL_CANCELLED user_id={user.id}")
 
             if broadcast_ws:
@@ -523,9 +540,11 @@ class VoiceCallService:
                 logger.info(f"[CALL] call_id={session.session_key} event=IDEMPOTENT_END_REPEAT status={session.status}")
                 return {'status': session.status, 'ended_at': session.ended_at}, 200
 
+            old_status = session.status
             session.status = VoiceSession.VoiceSessionStatus.ENDED
             session.ended_at = timezone.now()
             session.save()
+            logger.info(f"[CALL-ACTION] action=END event=STATE_TRANSITION call_id={session.session_key} from={old_status} to={session.status} user_id={user.id}")
             logger.info(f"[CALL] call_id={session.session_key} event=CALL_ENDED user_id={user.id}")
 
             if broadcast_ws:
