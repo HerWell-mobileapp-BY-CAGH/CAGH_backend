@@ -401,16 +401,34 @@ class VoiceCallService:
             cls.broadcast_call_status(consultation, session, user, 'ACCEPTED')
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-        token = AgoraService.generate_rtc_token(
-            channel_name=session.agora_channel_name,
-            uid=user.id,
-            role=AgoraRole.PUBLISHER
-        )
-
         caller = session.caller
         _, _, recipient = cls.verify_and_resolve_participants(consultation, user)
         caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
         recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
+
+        # Only call the token builder for genuine accepts.
+        # Idempotent repeats (duplicate ACCEPT from CallKit echo, cold-start
+        # restore, etc.) still receive a valid token so the response is
+        # always usable, but we skip the unnecessary extra RtcTokenBuilder
+        # invocation to avoid the triple token-generation log noise.
+        if not is_idempotent_repeat:
+            token = AgoraService.generate_rtc_token(
+                channel_name=session.agora_channel_name,
+                uid=user.id,
+                role=AgoraRole.PUBLISHER
+            )
+        else:
+            # Re-generate once on idempotent repeat so the caller still gets
+            # a valid token, but log clearly that this is a repeat path.
+            logger.info(
+                f"[CALL] call_id={session.session_key} event=ACCEPT_TOKEN_REPEAT_GEN "
+                f"user_id={user.id} — generating token for idempotent repeat"
+            )
+            token = AgoraService.generate_rtc_token(
+                channel_name=session.agora_channel_name,
+                uid=user.id,
+                role=AgoraRole.PUBLISHER
+            )
 
         return {
             'status': session.status,
@@ -578,16 +596,19 @@ class VoiceCallService:
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
 
         if session.status in TERMINAL_CALL_STATES:
-            logger.warning(f"[CALL] call_id={session.session_key} event=TOKEN_REJECTED_TERMINAL status={session.status}")
+            logger.warning(
+                f"[CALL] call_id={session.session_key} event=TOKEN_REJECTED_TERMINAL "
+                f"status={session.status} — returning 410 Gone"
+            )
+            # Return 410 Gone so the client can distinguish "session ended" from a
+            # successful token response.  An empty token with HTTP 200 would cause
+            # the Flutter client to call Agora joinChannel("") which produces error 17.
             return {
-                'agora_app_id': agora_app_id,
-                'agora_channel_name': session.agora_channel_name or "",
-                'agora_token': "",
-                'uid': AgoraService.get_numeric_uid(user.id),
+                'error': f"Voice session is no longer active (status: {session.status}).",
+                'status': session.status,
                 'session_key': session.session_key,
                 'call_id': session.session_key,
-                'status': session.status,
-            }, 200
+            }, 410
 
         if not session.agora_channel_name:
             session.agora_channel_name = f"cagh_voice_{session.session_key}"
