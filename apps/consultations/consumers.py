@@ -106,9 +106,14 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
 
         # 2. Call Answered / Accepted
         elif action_type in ['call_accepted', 'call_answer', 'call_answered', 'incoming_call_answer', 'answer']:
+            # NOTE: The HTTP /voice-session/accept/ endpoint is the authoritative
+            # owner of the ACCEPT state transition.  When the Flutter client sends
+            # call_accepted via the consultation room WS (fallback signal path) the
+            # session is already ACCEPTED/ONGOING — calling process_call_service_action
+            # here just produces an idempotent-repeat token generation on every
+            # call_accepted relay.  Skip the service action; only relay the signal
+            # to consultation room subscribers.
             call_type = data.get('call_type', 'VOICE')
-            await self.process_call_service_action(self.consultation_id, user, 'ACCEPT', call_type=call_type)
-
             await self.channel_layer.group_send(
                 self.group_name,
                 {
