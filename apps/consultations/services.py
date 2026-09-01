@@ -361,7 +361,9 @@ class VoiceCallService:
         """
         Accepts an active ringing VoiceSession.
         Enforces database locking and rejects illegal state transitions with 409 Conflict.
+        Handles repeated ACCEPT requests idempotently without duplicate side-effects.
         """
+        is_idempotent_repeat = False
         with transaction.atomic():
             cls.verify_and_resolve_participants(consultation, user)
             session = cls.get_voice_session(consultation, select_for_update=True)
@@ -374,23 +376,28 @@ class VoiceCallService:
                 logger.warning(f"[CALL] call_id={session.session_key} event=ACCEPT_REJECTED status={session.status}")
                 return {"error": f"Cannot accept call. Call status is '{session.status}'."}, 409
 
-            old_status = session.status
-            session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
-            if not session.started_at:
-                session.started_at = timezone.now()
-            if not session.agora_channel_name:
-                session.agora_channel_name = f"cagh_voice_{session.session_key}"
-            session.save()
+            if session.status in [VoiceSession.VoiceSessionStatus.ACCEPTED, VoiceSession.VoiceSessionStatus.ONGOING]:
+                is_idempotent_repeat = True
+                logger.info(f"[CALL-ACTION] action=ACCEPT event=IDEMPOTENT_ACCEPT_REPEAT call_id={session.session_key} status={session.status} user_id={user.id}")
+                logger.info(f"[CALL] call_id={session.session_key} event=IDEMPOTENT_ACCEPT_REPEAT status={session.status} user_id={user.id}")
+            else:
+                old_status = session.status
+                session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
+                if not session.started_at:
+                    session.started_at = timezone.now()
+                if not session.agora_channel_name:
+                    session.agora_channel_name = f"cagh_voice_{session.session_key}"
+                session.save()
 
-            consultation.status = Consultation.ConsultationStatus.ACTIVE
-            if not consultation.started_at:
-                consultation.started_at = timezone.now()
-            consultation.save()
+                consultation.status = Consultation.ConsultationStatus.ACTIVE
+                if not consultation.started_at:
+                    consultation.started_at = timezone.now()
+                consultation.save()
 
-            logger.info(f"[CALL-ACTION] action=ACCEPT event=STATE_TRANSITION call_id={session.session_key} from={old_status} to={session.status} user_id={user.id}")
-            logger.info(f"[CALL] call_id={session.session_key} event=CALL_ACCEPTED user_id={user.id}")
+                logger.info(f"[CALL-ACTION] action=ACCEPT event=STATE_TRANSITION call_id={session.session_key} from={old_status} to={session.status} user_id={user.id}")
+                logger.info(f"[CALL] call_id={session.session_key} event=CALL_ACCEPTED user_id={user.id}")
 
-        if broadcast_ws:
+        if broadcast_ws and not is_idempotent_repeat:
             cls.broadcast_call_status(consultation, session, user, 'ACCEPTED')
 
         agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
@@ -406,7 +413,7 @@ class VoiceCallService:
         recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
 
         return {
-            'status': 'ACCEPTED',
+            'status': session.status,
             'session_key': session.session_key,
             'call_id': session.session_key,
             'agora_channel_name': session.agora_channel_name,

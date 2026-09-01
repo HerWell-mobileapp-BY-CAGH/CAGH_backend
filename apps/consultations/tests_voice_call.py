@@ -614,6 +614,95 @@ class VoiceCallBackendTestCase(APITestCase):
             self.assertIn("action=ACCEPT", output_auth)
             self.assertIn("event=AUTH_FAILURE", output_auth)
 
+    @patch("channels.layers.InMemoryChannelLayer.group_send")
+    def test_case_1_and_case_2_accept_idempotency_and_ws_suppression(self, mock_group_send):
+        """
+        CASE 1: First ACCEPT transitions RINGING -> ACCEPTED with exactly 1 WS broadcast sequence.
+        CASE 2: Repeated ACCEPT returns 200/ACCEPTED idempotently with NO duplicate WS broadcast.
+        """
+        # Start Call
+        VoiceCallService.start_call(self.consultation, self.patient)
+        mock_group_send.reset_mock()
+
+        # First ACCEPT (Midwife) -> RINGING -> ACCEPTED
+        res1, code1 = VoiceCallService.accept_call(self.consultation, self.midwife_user)
+        self.assertEqual(code1, status.HTTP_200_OK)
+        self.assertEqual(res1["status"], "ACCEPTED")
+
+        # Check exactly one WS call_accepted broadcast occurred (1 consultation_call group + 1 user_calls group)
+        accept_ws_calls_1 = [
+            call_args for call_args in mock_group_send.call_args_list
+            if isinstance(call_args[0][1], dict) and call_args[0][1].get("action") == "call_accepted"
+        ]
+        self.assertEqual(len(accept_ws_calls_1), 2)
+
+        # Second ACCEPT (Midwife repeat) -> ACCEPTED -> ACCEPTED
+        mock_group_send.reset_mock()
+        res2, code2 = VoiceCallService.accept_call(self.consultation, self.midwife_user)
+        self.assertEqual(code2, status.HTTP_200_OK)
+        self.assertEqual(res2["status"], "ACCEPTED")
+        self.assertIsNotNone(res2["agora_token"])
+
+        # Check NO duplicate WS call_accepted broadcast occurred on repeat ACCEPT
+        accept_ws_calls_2 = [
+            call_args for call_args in mock_group_send.call_args_list
+            if isinstance(call_args[0][1], dict) and call_args[0][1].get("action") == "call_accepted"
+        ]
+        self.assertEqual(len(accept_ws_calls_2), 0)
+
+    @patch("channels.layers.InMemoryChannelLayer.group_send")
+    def test_case_3_simultaneous_concurrent_accept_requests(self, mock_group_send):
+        """
+        CASE 3: Two ACCEPT requests (request A and request B) target the same session.
+        Only one logical state transition occurs (RINGING -> ACCEPTED) and
+        duplicate WS signals are suppressed. The database remains consistent.
+        """
+        VoiceCallService.start_call(self.consultation, self.patient)
+        mock_group_send.reset_mock()
+
+        # Request A targets session
+        res_a, code_a = VoiceCallService.accept_call(self.consultation, self.midwife_user)
+        # Request B targets same session
+        res_b, code_b = VoiceCallService.accept_call(self.consultation, self.midwife_user)
+
+        self.assertEqual(code_a, status.HTTP_200_OK)
+        self.assertEqual(code_b, status.HTTP_200_OK)
+        self.assertEqual(res_a["status"], "ACCEPTED")
+        self.assertEqual(res_b["status"], "ACCEPTED")
+
+        # Database state remains ACCEPTED
+        session = VoiceSession.objects.get(consultation=self.consultation)
+        self.assertEqual(session.status, VoiceSession.VoiceSessionStatus.ACCEPTED)
+
+        # Only one set of WS broadcast signals (1 consultation group + 1 user group = 2 calls)
+        accept_ws_calls = [
+            call_args for call_args in mock_group_send.call_args_list
+            if isinstance(call_args[0][1], dict) and call_args[0][1].get("action") == "call_accepted"
+        ]
+        self.assertEqual(len(accept_ws_calls), 2)
+
+    def test_case_4_accept_after_ended_returns_conflict(self):
+        """
+        CASE 4: ACCEPT after ENDED returns 409 Conflict (terminal state behavior preserved).
+        """
+        VoiceCallService.start_call(self.consultation, self.patient)
+        VoiceCallService.end_call(self.consultation, self.patient)
+
+        res, code = VoiceCallService.accept_call(self.consultation, self.midwife_user)
+        self.assertEqual(code, status.HTTP_409_CONFLICT)
+        self.assertIn("error", res)
+
+    def test_case_5_unauthorized_participant_returns_forbidden(self):
+        """
+        CASE 5: Unauthorized participant attempting ACCEPT is rejected with PermissionDenied (403).
+        """
+        VoiceCallService.start_call(self.consultation, self.patient)
+        unauth_user = User.objects.create_user(username="unauth_case5", password="Password123!")
+
+        with self.assertRaises(PermissionDenied):
+            VoiceCallService.accept_call(self.consultation, unauth_user)
+
+
 
 
 
