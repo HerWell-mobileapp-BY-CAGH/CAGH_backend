@@ -3,7 +3,7 @@ import time
 import hashlib
 import logging
 from django.conf import settings
-from agora_token_builder import RtcTokenBuilder
+from .agora_token.RtcTokenBuilder2 import RtcTokenBuilder, Role_Publisher
 
 logger = logging.getLogger(__name__)
 
@@ -64,21 +64,22 @@ class AgoraService:
             logger.error(f"[AGORA SERVICE ERROR] AGORA_APP_CERTIFICATE is not configured in settings or environment.")
             raise ImproperlyConfigured("AGORA_APP_CERTIFICATE is required for signed RTC token generation.")
 
-        # Build official signed Agora RTC Access Token using official agora-token-builder
+        # Build official signed Agora RTC Access Token using AccessToken2 (v007)
         try:
-            token = RtcTokenBuilder.buildTokenWithUid(
-                appId=app_id,
-                appCertificate=app_certificate,
-                channelName=channel_name,
+            token = RtcTokenBuilder.build_token_with_uid(
+                app_id=app_id,
+                app_certificate=app_certificate,
+                channel_name=channel_name,
                 uid=numeric_uid,
-                role=role,
-                privilegeExpiredTs=privilege_expired_ts
+                role=Role_Publisher,  # Use Role_Publisher constant from AccessToken2
+                token_expire=expire_seconds,
+                privilege_expire=0  # 0 means same as token_expire
             )
             token_prefix = token[:10] if token else None
             logger.info(f"[AGORA TOKEN DEBUG] app_id={app_id} numeric_uid={numeric_uid} channel={channel_name} token_prefix={token_prefix} expires={privilege_expired_ts}")
             logger.info(f"[AGORA DEBUG] token_prefix={token_prefix} | app_id={app_id} | uid={numeric_uid} | channel={channel_name} | role={role} | expires={privilege_expired_ts} | now={current_ts}")
             if not token:
-                raise ValueError("RtcTokenBuilder.buildTokenWithUid returned empty or None token.")
+                raise ValueError("RtcTokenBuilder.build_token_with_uid returned empty or None token.")
             return token
         except Exception as e:
             logger.error(f"[AGORA SERVICE ERROR] Token generation failed: {e}", exc_info=True)
