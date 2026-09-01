@@ -138,16 +138,25 @@ class VoiceCallService:
             if ended_at:
                 ws_payload['ended_at'] = ended_at.isoformat() if hasattr(ended_at, 'isoformat') else ended_at
 
-            async_to_sync(channel_layer.group_send)(
-                f"consultation_call_{consultation.id}",
-                {
-                    'type': event_type,
-                    'action': event_name,
-                    'sender_id': user_id_str,
-                    'consultation_id': str(consultation.id),
-                    'ended_at': ws_payload.get('ended_at'),
-                }
-            )
+            # Point-to-point call lifecycle signals (ACCEPTED, DECLINED, ENDED,
+            # CANCELLED) must only be delivered to the target user's personal
+            # channel.  Broadcasting to the consultation room group as well
+            # causes duplicate delivery when the caller is subscribed to both
+            # the user_calls channel and the consultation room channel.
+            ROOM_BROADCAST_ACTIONS = {'incoming', 'offer', 'connected'}
+            should_broadcast_to_room = action_lower in ROOM_BROADCAST_ACTIONS
+
+            if should_broadcast_to_room:
+                async_to_sync(channel_layer.group_send)(
+                    f"consultation_call_{consultation.id}",
+                    {
+                        'type': event_type,
+                        'action': event_name,
+                        'sender_id': user_id_str,
+                        'consultation_id': str(consultation.id),
+                        'ended_at': ws_payload.get('ended_at'),
+                    }
+                )
 
             recipient_id = None
             if session and session.caller and str(session.caller.id) != user_id_str:
