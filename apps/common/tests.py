@@ -1,4 +1,5 @@
 from django.urls import reverse
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
@@ -115,4 +116,117 @@ class FacilityLocatorTestCase(APITestCase):
         self.assertIn("distance_km", res.data)
         self.assertIn("google_maps", res.data["navigation_urls"])
         self.assertEqual(res.data["call_url"], "tel:+251115511211")
+
+
+@override_settings(
+    SECURE_SSL_REDIRECT=False,
+    ALLOWED_HOSTS=["testserver", "localhost", "127.0.0.1"],
+)
+class AdminDashboardAPITestCase(APITestCase):
+    """Tests for /api/v1/admin/dashboard/ and /api/v1/admin/midwives/{id}/stats/."""
+
+    def setUp(self):
+        from apps.midwives.models import MidwifeProfile, Hospital
+        from apps.appointments.models import Appointment
+        from apps.consultations.models import Consultation
+        from apps.common.models import AuditLog
+        from apps.common.utils import log_audit
+
+        self.admin = User.objects.create_superuser(
+            username="stats_admin",
+            email="stats-admin@example.com",
+            password="AdminPassword123!",
+            role="ADMIN",
+        )
+        self.patient = User.objects.create_user(
+            username="stats_patient",
+            email="patient@example.com",
+            password="Password123!",
+            role="PATIENT",
+        )
+        self.midwife_user = User.objects.create_user(
+            username="stats_midwife",
+            email="midwife@example.com",
+            password="Password123!",
+            role="MIDWIFE",
+        )
+        self.hospital = Hospital.objects.create(
+            name="Test Hospital",
+            address="Addis Ababa",
+            phone="+251111111111",
+        )
+        self.midwife_profile = MidwifeProfile.objects.create(
+            user=self.midwife_user,
+            hospital=self.hospital,
+            license_number="MW-STATS-001",
+            verification_status=MidwifeProfile.VerificationStatus.APPROVED,
+        )
+
+        # Seed one appointment + linked consultation for the midwife stats endpoint.
+        self.appointment = Appointment.objects.create(
+            user=self.patient,
+            midwife=self.midwife_profile,
+            appointment_type="VIRTUAL_VOICE",
+            scheduled_date="2026-09-10",
+            start_time="10:00:00",
+            end_time="10:30:00",
+            status=Appointment.AppointmentStatus.CONFIRMED,
+            created_by=self.patient,
+        )
+        self.consultation = Consultation.objects.create(
+            appointment=self.appointment,
+            user=self.patient,
+            midwife=self.midwife_profile,
+            consultation_type="VIRTUAL_VOICE",
+            status=Consultation.ConsultationStatus.SCHEDULED,
+        )
+
+        # Seed an audit row so the dashboard activity feed is non-empty.
+        log_audit(user=self.admin, action="MIDWIFE_VERIFY_APPROVE", details={"midwife_id": str(self.midwife_profile.id)})
+
+    def test_dashboard_requires_admin(self):
+        """Non-admin users must not access platform-wide dashboard statistics."""
+        self.client.force_authenticate(user=self.patient)
+        response = self.client.get(reverse("admin-dashboard"))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_dashboard_returns_totals_and_breakdowns(self):
+        """Admin dashboard returns aggregate counts and status maps."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(reverse("admin-dashboard"))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("totals", response.data)
+        self.assertGreaterEqual(response.data["totals"]["users"], 3)
+        self.assertGreaterEqual(response.data["totals"]["midwives"], 1)
+        self.assertGreaterEqual(response.data["totals"]["consultations"], 1)
+        self.assertEqual(response.data["totals"]["appointments"]["CONFIRMED"], 1)
+        self.assertIn("CONFIRMED", response.data["appointments_by_status"])
+        self.assertIn("SCHEDULED", response.data["consultations_by_status"])
+        self.assertGreaterEqual(len(response.data["recent_activities"]), 1)
+
+    def test_midwife_stats_returns_per_status_counts(self):
+        """Selecting one midwife returns consultation/appointment stats with status breakdown."""
+        self.client.force_authenticate(user=self.admin)
+        url = reverse("admin-midwife-stats", kwargs={"pk": self.midwife_profile.id})
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["midwife"]["license_number"], "MW-STATS-001")
+        self.assertEqual(response.data["totals"]["consultations"], 1)
+        self.assertEqual(response.data["totals"]["appointments"], 1)
+        self.assertEqual(response.data["consultations_by_status"]["SCHEDULED"], 1)
+        self.assertEqual(response.data["appointments_by_status"]["CONFIRMED"], 1)
+        self.assertEqual(len(response.data["recent_consultations"]), 1)
+        self.assertEqual(len(response.data["recent_appointments"]), 1)
+
+    def test_midwife_stats_not_found(self):
+        """Unknown midwife profile IDs return a 404."""
+        self.client.force_authenticate(user=self.admin)
+        url = reverse(
+            "admin-midwife-stats",
+            kwargs={"pk": "00000000-0000-0000-0000-000000000001"},
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 

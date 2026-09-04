@@ -222,6 +222,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
                 defaults={
                     "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
                     "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                    "is_accepting_bookings": False,
                 }
             )
 

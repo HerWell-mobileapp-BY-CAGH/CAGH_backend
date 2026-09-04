@@ -3,9 +3,11 @@ from django.utils import timezone
 from rest_framework import viewsets, permissions, status, generics, exceptions
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from apps.common.utils import log_audit
+from apps.users.permissions import IsAdmin
 from .models import Hospital, MidwifeProfile, Qualification, Certificate, Expertise, SavedMidwife, BlockedDate
 from .serializers import (
     HospitalSerializer,
@@ -16,7 +18,77 @@ from .serializers import (
     SavedMidwifeSerializer,
     BlockedDateSerializer,
     MidwifeDashboardSerializer,
+    MidwifeApplicationDetailSerializer,
+    MidwifeReviewActionSerializer,
 )
+from .utils import notify_midwife_review_result
+
+
+def _apply_midwife_review(*, midwife, admin_user, action_type, reason="", request=None):
+    """Apply an admin review decision and return a response payload."""
+    if action_type == "APPROVE":
+        midwife.verification_status = MidwifeProfile.VerificationStatus.APPROVED
+        midwife.verified_at = timezone.now()
+        midwife.verified_by = admin_user
+        midwife.rejection_reason = ""
+        midwife.suspension_reason = ""
+        midwife.is_accepting_bookings = True
+        midwife.save()
+        notify_midwife_review_result(midwife, approved=True)
+        log_audit(
+            user=admin_user,
+            action="MIDWIFE_VERIFY_APPROVE",
+            request=request,
+            details={"midwife_id": str(midwife.id)},
+        )
+        return {
+            "status": "APPROVED",
+            "message": "Midwife account approved successfully.",
+            "verification_status": midwife.verification_status,
+        }
+
+    if action_type == "REJECT":
+        midwife.verification_status = MidwifeProfile.VerificationStatus.REJECTED
+        midwife.rejection_reason = reason.strip()
+        midwife.verified_at = None
+        midwife.verified_by = admin_user
+        midwife.is_accepting_bookings = False
+        midwife.save()
+        notify_midwife_review_result(midwife, rejected=True, reason=midwife.rejection_reason)
+        log_audit(
+            user=admin_user,
+            action="MIDWIFE_VERIFY_REJECT",
+            request=request,
+            details={"midwife_id": str(midwife.id), "reason": midwife.rejection_reason},
+        )
+        return {
+            "status": "REJECTED",
+            "message": "Midwife application rejected.",
+            "verification_status": midwife.verification_status,
+            "rejection_reason": midwife.rejection_reason,
+        }
+
+    if action_type == "SUSPEND":
+        midwife.verification_status = MidwifeProfile.VerificationStatus.SUSPENDED
+        midwife.suspension_reason = reason.strip()
+        midwife.verified_by = admin_user
+        midwife.is_accepting_bookings = False
+        midwife.save()
+        notify_midwife_review_result(midwife, suspended=True, reason=midwife.suspension_reason)
+        log_audit(
+            user=admin_user,
+            action="MIDWIFE_VERIFY_SUSPEND",
+            request=request,
+            details={"midwife_id": str(midwife.id), "reason": midwife.suspension_reason},
+        )
+        return {
+            "status": "SUSPENDED",
+            "message": "Midwife account suspended.",
+            "verification_status": midwife.verification_status,
+            "suspension_reason": midwife.suspension_reason,
+        }
+
+    return None
 
 
 class HospitalViewSet(viewsets.ModelViewSet):
@@ -96,6 +168,7 @@ class MidwifeProfileViewSet(viewsets.ModelViewSet):
             defaults={
                 "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
                 "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                "is_accepting_bookings": False,
             }
         )
 
@@ -110,40 +183,39 @@ class MidwifeProfileViewSet(viewsets.ModelViewSet):
 
     @extend_schema(
         summary="Admin review and approval workflow for midwife accounts",
-        description="Action types: APPROVE, REJECT, SUSPEND",
+        description="Action types: APPROVE, REJECT (requires reason), SUSPEND (requires reason)",
+        request=MidwifeReviewActionSerializer,
         tags=["Midwives"],
     )
-    @action(detail=True, methods=['post'], permission_classes=[permissions.IsAdminUser])
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
     def verify(self, request, pk=None):
         midwife = self.get_object()
-        action_type = request.data.get('action')  # APPROVE, REJECT, SUSPEND
+        serializer = MidwifeReviewActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        if action_type == 'APPROVE':
-            midwife.verification_status = MidwifeProfile.VerificationStatus.APPROVED
-            midwife.verified_at = timezone.now()
-            midwife.verified_by = request.user
-            midwife.rejection_reason = ''
-            midwife.save()
-            log_audit(user=request.user, action="MIDWIFE_VERIFY_APPROVE", request=request, details={"midwife_id": str(midwife.id)})
-            return Response({'status': 'Midwife account approved successfully.'}, status=status.HTTP_200_OK)
+        action_type = serializer.validated_data["action"]
+        reason = serializer.validated_data.get("reason", "")
 
-        elif action_type == 'REJECT':
-            midwife.verification_status = MidwifeProfile.VerificationStatus.REJECTED
-            midwife.rejection_reason = request.data.get('reason', '')
-            midwife.save()
-            log_audit(user=request.user, action="MIDWIFE_VERIFY_REJECT", request=request, details={"midwife_id": str(midwife.id), "reason": midwife.rejection_reason})
-            return Response({'status': 'Midwife account rejected.'}, status=status.HTTP_200_OK)
+        if action_type == "REJECT" and midwife.verification_status == MidwifeProfile.VerificationStatus.APPROVED:
+            return Response(
+                {"error": "Use SUSPEND to disable an already approved midwife account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        elif action_type == 'SUSPEND':
-            midwife.verification_status = MidwifeProfile.VerificationStatus.SUSPENDED
-            midwife.save()
-            log_audit(user=request.user, action="MIDWIFE_VERIFY_SUSPEND", request=request, details={"midwife_id": str(midwife.id)})
-            return Response({'status': 'Midwife account suspended.'}, status=status.HTTP_200_OK)
-
-        return Response(
-            {'error': 'Invalid action. Allowed values: APPROVE, REJECT, SUSPEND.'},
-            status=status.HTTP_400_BAD_REQUEST,
+        result = _apply_midwife_review(
+            midwife=midwife,
+            admin_user=request.user,
+            action_type=action_type,
+            reason=reason,
+            request=request,
         )
+        if result is None:
+            return Response(
+                {'error': 'Invalid action. Allowed values: APPROVE, REJECT, SUSPEND.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)
 
 
 class QualificationViewSet(viewsets.ModelViewSet):
@@ -289,4 +361,113 @@ class MidwifeDashboardView(generics.GenericAPIView):
         }
 
         return Response(data, status=status.HTTP_200_OK)
+
+
+class MidwifeApplicationListView(generics.ListAPIView):
+    """
+    Admin-only list of midwife applications awaiting review.
+    Returns full registration details for each pending application.
+    """
+
+    serializer_class = MidwifeApplicationDetailSerializer
+    permission_classes = [IsAdmin]
+
+    def get_queryset(self):
+        queryset = (
+            MidwifeProfile.objects.select_related("user", "user__profile", "hospital", "verified_by")
+            .prefetch_related("qualifications", "certificates", "expertises")
+            .order_by("created_at")
+        )
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            return queryset.filter(verification_status=status_param)
+
+        return queryset.filter(
+            verification_status__in=[
+                MidwifeProfile.VerificationStatus.PENDING,
+                MidwifeProfile.VerificationStatus.UNDER_REVIEW,
+            ]
+        )
+
+    @extend_schema(
+        summary="List midwife applications pending admin review",
+        description=(
+            "Admin-only. Returns all submitted midwife registration details. "
+            "Defaults to PENDING and UNDER_REVIEW applications."
+        ),
+        tags=["Midwives"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class MidwifeApplicationDetailView(generics.RetrieveAPIView):
+    """Admin-only detailed view of a single midwife application."""
+
+    serializer_class = MidwifeApplicationDetailSerializer
+    permission_classes = [IsAdmin]
+    lookup_field = "pk"
+
+    def get_queryset(self):
+        return (
+            MidwifeProfile.objects.select_related("user", "user__profile", "hospital", "verified_by")
+            .prefetch_related("qualifications", "certificates", "expertises")
+        )
+
+    @extend_schema(
+        summary="Retrieve full midwife application details for admin review",
+        tags=["Midwives"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+class MidwifeApplicationReviewView(APIView):
+    """Admin-only approve/reject endpoint for midwife applications."""
+
+    permission_classes = [IsAdmin]
+
+    @extend_schema(
+        summary="Approve or reject a midwife application",
+        request=MidwifeReviewActionSerializer,
+        tags=["Midwives"],
+    )
+    def post(self, request, pk):
+        try:
+            midwife = (
+                MidwifeProfile.objects.select_related("user")
+                .prefetch_related("qualifications", "certificates", "expertises")
+                .get(pk=pk)
+            )
+        except MidwifeProfile.DoesNotExist:
+            return Response({"error": "Midwife application not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = MidwifeReviewActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        action_type = serializer.validated_data["action"]
+        reason = serializer.validated_data.get("reason", "")
+
+        if action_type == "REJECT" and midwife.verification_status == MidwifeProfile.VerificationStatus.APPROVED:
+            return Response(
+                {"error": "Use SUSPEND to disable an already approved midwife account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        result = _apply_midwife_review(
+            midwife=midwife,
+            admin_user=request.user,
+            action_type=action_type,
+            reason=reason,
+            request=request,
+        )
+        if result is None:
+            return Response(
+                {"error": "Invalid action. Allowed values: APPROVE, REJECT, SUSPEND."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        detail = MidwifeApplicationDetailSerializer(midwife, context={"request": request}).data
+        return Response({**result, "application": detail}, status=status.HTTP_200_OK)
 

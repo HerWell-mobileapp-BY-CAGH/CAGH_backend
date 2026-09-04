@@ -66,6 +66,8 @@ class UserSerializer(serializers.ModelSerializer):
                 "id": str(mw.id),
                 "license_number": mw.license_number,
                 "verification_status": mw.verification_status,
+                "rejection_reason": mw.rejection_reason,
+                "suspension_reason": mw.suspension_reason,
                 "specialty": mw.specialty,
                 "consultation_fee": str(mw.consultation_fee),
                 "experience_years": mw.experience_years,

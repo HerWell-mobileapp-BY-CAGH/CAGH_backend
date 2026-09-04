@@ -69,6 +69,26 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 code="no_active_account",
             )
 
+        from apps.users.models import User
+
+        # Auto-heal: If user has a MidwifeProfile attached, ensure DB role is MIDWIFE
+        if hasattr(user, 'midwife_profile') and user.role != User.Role.MIDWIFE:
+            user.role = User.Role.MIDWIFE
+            user.save(update_fields=['role'])
+
+        # Auto-heal: If user.role is MIDWIFE but lacks MidwifeProfile, create default profile
+        if user.role == User.Role.MIDWIFE and not hasattr(user, 'midwife_profile'):
+            from apps.midwives.models import MidwifeProfile
+            import uuid
+            MidwifeProfile.objects.get_or_create(
+                user=user,
+                defaults={
+                    "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
+                    "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                    "is_accepting_bookings": False,
+                }
+            )
+
         req = self.context.get("request")
         requested_role_raw = (
             attrs.get("role")
@@ -88,23 +108,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             )
 
         from apps.users.models import User
-
-        # Auto-heal: If user has a MidwifeProfile attached, ensure DB role is MIDWIFE
-        if hasattr(user, 'midwife_profile') and user.role != User.Role.MIDWIFE:
-            user.role = User.Role.MIDWIFE
-            user.save(update_fields=['role'])
-
-        # Auto-heal: If user.role is MIDWIFE but lacks MidwifeProfile, create default profile
-        if user.role == User.Role.MIDWIFE and not hasattr(user, 'midwife_profile'):
-            from apps.midwives.models import MidwifeProfile
-            import uuid
-            MidwifeProfile.objects.get_or_create(
-                user=user,
-                defaults={
-                    "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
-                    "verification_status": MidwifeProfile.VerificationStatus.PENDING,
-                }
-            )
 
         # Determine target requested role (if omitted by frontend login, default to user's registered role)
         target_requested_role = requested_role_raw or user.role

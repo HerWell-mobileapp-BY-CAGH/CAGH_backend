@@ -130,20 +130,27 @@ class UserRegistrationView(generics.CreateAPIView):
 
         tokens = _token_pair_for(user)
 
-        return Response(
-            {
-                "message": "Account created successfully.",
-                "user": {
-                    "id": str(user.id),
-                    "username": user.username,
-                    "email": user.email,
-                    "role": user.role,
-                    "phone_number": user.phone_number,
-                },
-                **tokens,
+        payload = {
+            "message": "Account created successfully.",
+            "user": {
+                "id": str(user.id),
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+                "phone_number": user.phone_number,
             },
-            status=status.HTTP_201_CREATED,
-        )
+            **tokens,
+        }
+
+        if user.role == User.Role.MIDWIFE:
+            payload["message"] = (
+                "Midwife account registered successfully. Your application is pending admin approval. "
+                "You can sign in and complete your profile, but you will not appear to patients "
+                "or accept bookings until an administrator approves your credentials."
+            )
+            payload["requires_admin_approval"] = True
+
+        return Response(payload, status=status.HTTP_201_CREATED)
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +343,7 @@ class OTPLoginView(APIView):
                 defaults={
                     "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
                     "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                    "is_accepting_bookings": False,
                 }
             )
 

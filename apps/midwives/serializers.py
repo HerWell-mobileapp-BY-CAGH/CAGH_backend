@@ -17,10 +17,20 @@ class QualificationSerializer(serializers.ModelSerializer):
 
 
 class CertificateSerializer(serializers.ModelSerializer):
+    document_file_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Certificate
         fields = '__all__'
         read_only_fields = ('id', 'midwife', 'is_verified')
+
+    def get_document_file_url(self, obj):
+        if not obj.document_file:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(obj.document_file.url)
+        return obj.document_file.url
 
 
 class ExpertiseSerializer(serializers.ModelSerializer):
@@ -52,7 +62,8 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = (
             'id', 'user', 'verification_status', 'verified_at',
-            'verified_by', 'rejection_reason', 'created_at', 'updated_at'
+            'verified_by', 'rejection_reason', 'suspension_reason',
+            'created_at', 'updated_at'
         )
         extra_kwargs = {
             'license_number': {'required': True, 'allow_blank': False},
@@ -121,4 +132,63 @@ class MidwifeDashboardSerializer(serializers.Serializer):
     pending_requests = serializers.ListField()
     recent_history = serializers.ListField()
     counts = serializers.DictField()
+
+
+class AdminReviewerSerializer(serializers.Serializer):
+    id = serializers.UUIDField()
+    username = serializers.CharField()
+    email = serializers.EmailField(allow_null=True)
+    full_name = serializers.SerializerMethodField()
+
+    def get_full_name(self, obj):
+        profile = getattr(obj, "profile", None)
+        if profile and (profile.first_name or profile.last_name):
+            return f"{profile.first_name} {profile.last_name}".strip()
+        return obj.username or obj.email or str(obj.id)
+
+
+class MidwifeApplicationDetailSerializer(MidwifeProfileSerializer):
+    """Full midwife registration payload for admin review."""
+
+    cv_file_url = serializers.SerializerMethodField()
+    verified_by_detail = AdminReviewerSerializer(source="verified_by", read_only=True)
+    certificates = CertificateSerializer(many=True, read_only=True)
+
+    class Meta(MidwifeProfileSerializer.Meta):
+        fields = (
+            "id", "user", "hospital", "hospital_id", "license_number", "bio",
+            "experience_years", "languages", "cv_file", "cv_file_url",
+            "offered_consultation_types", "verification_status", "verified_at",
+            "verified_by", "verified_by_detail", "rejection_reason", "suspension_reason", "specialty",
+            "consultation_fee", "is_accepting_bookings", "rating_average",
+            "rating_count", "created_at", "updated_at", "qualifications",
+            "certificates", "expertises", "is_favorite",
+        )
+        read_only_fields = MidwifeProfileSerializer.Meta.read_only_fields
+
+    def get_cv_file_url(self, obj):
+        if not obj.cv_file:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(obj.cv_file.url)
+        return obj.cv_file.url
+
+
+class MidwifeReviewActionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=["APPROVE", "REJECT", "SUSPEND"])
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=2000,
+        help_text="Required when action is REJECT or SUSPEND.",
+    )
+
+    def validate(self, attrs):
+        if attrs["action"] in ("REJECT", "SUSPEND") and not str(attrs.get("reason", "")).strip():
+            action_label = "rejecting" if attrs["action"] == "REJECT" else "suspending"
+            raise serializers.ValidationError(
+                {"reason": f"A reason is required when {action_label} a midwife account."}
+            )
+        return attrs
 
