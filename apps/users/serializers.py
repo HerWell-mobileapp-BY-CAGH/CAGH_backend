@@ -79,7 +79,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     date_of_birth = serializers.DateField(write_only=True, required=False, allow_null=True)
     gender = serializers.ChoiceField(choices=Profile.Gender.choices, write_only=True, required=False, allow_null=True, allow_blank=True)
     region = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True)
-    license_number = serializers.CharField(max_length=100, write_only=True, required=False, allow_blank=True, allow_null=True, help_text="Official medical license number for midwives.")
     otp_code = serializers.CharField(max_length=6, write_only=True, required=False, allow_blank=True)
 
     class Meta:
@@ -97,7 +96,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             "date_of_birth",
             "gender",
             "region",
-            "license_number",
             "otp_code",
         )
         extra_kwargs = {
@@ -162,15 +160,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             if password:
                 validate_password(password)
 
-        # Require license_number if role is MIDWIFE
-        role = self.validate_role(attrs.get("role"))
-        if role == User.Role.MIDWIFE:
-            license_number = attrs.get("license_number") or self.initial_data.get("license_number")
-            if not license_number or not str(license_number).strip():
-                raise serializers.ValidationError(
-                    {"license_number": "Official medical license number is required when registering a Midwife account."}
-                )
-
         return attrs
 
     # ---- Create ----
@@ -222,14 +211,15 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             gender=gender,
             region=region,
         )
-        license_number = validated_data.pop("license_number", None) or (self.initial_data.get("license_number") if hasattr(self, 'initial_data') and isinstance(self.initial_data, dict) else None)
+        license_number = (self.initial_data.get("license_number") if hasattr(self, 'initial_data') and isinstance(self.initial_data, dict) else None)
 
         if user.role == User.Role.MIDWIFE:
             from apps.midwives.models import MidwifeProfile
             defaults = {
                 "verification_status": MidwifeProfile.VerificationStatus.PENDING,
-                "license_number": license_number.strip() if license_number else f"LIC-{user.id.hex[:8].upper()}",
             }
+            if license_number and str(license_number).strip():
+                defaults["license_number"] = str(license_number).strip()
 
             MidwifeProfile.objects.get_or_create(
                 user=user,

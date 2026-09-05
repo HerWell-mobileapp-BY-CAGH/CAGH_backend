@@ -33,6 +33,21 @@ class AuthenticationTestCase(APITestCase):
         self.assertEqual(user.profile.gender, "FEMALE")
         self.assertEqual(user.profile.region, "Greater Accra")
 
+    def test_midwife_registration_without_license_number(self):
+        url = reverse("auth-register")
+        data = {
+            "email": "midwife_new@example.com",
+            "password": "SecurePassword123!",
+            "password_confirm": "SecurePassword123!",
+            "full_name": "Midwife Sarah",
+            "role": "MIDWIFE",
+        }
+        response = self.client.post(url, data, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["user"]["role"], "MIDWIFE")
+        user = User.objects.get(email="midwife_new@example.com")
+        self.assertTrue(hasattr(user, "midwife_profile"))
+
     def test_phone_registration_without_username(self):
         url = reverse("auth-register")
         data = {
