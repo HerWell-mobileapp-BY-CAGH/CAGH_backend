@@ -97,12 +97,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Auto-heal: If user.role is MIDWIFE but lacks MidwifeProfile, create default profile
         if user.role == User.Role.MIDWIFE and not hasattr(user, 'midwife_profile'):
             from apps.midwives.models import MidwifeProfile
-            import uuid
             MidwifeProfile.objects.get_or_create(
                 user=user,
                 defaults={
-                    "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
                     "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                    "license_number": f"LIC-{user.id.hex[:8].upper()}",
                 }
             )
 

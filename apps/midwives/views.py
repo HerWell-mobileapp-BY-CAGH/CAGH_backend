@@ -90,11 +90,9 @@ class MidwifeProfileViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        import uuid
         profile, _ = MidwifeProfile.objects.get_or_create(
             user=user,
             defaults={
-                "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
                 "verification_status": MidwifeProfile.VerificationStatus.PENDING,
             }
         )

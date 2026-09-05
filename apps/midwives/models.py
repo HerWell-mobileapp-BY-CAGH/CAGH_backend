@@ -29,7 +29,7 @@ class MidwifeProfile(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='midwife_profile')
     hospital = models.ForeignKey(Hospital, on_delete=models.SET_NULL, null=True, blank=True, related_name='midwives')
-    license_number = models.CharField(max_length=100, unique=True, help_text="Official unique medical license number")
+    license_number = models.CharField(max_length=100, unique=True, null=True, blank=True, help_text="Official unique medical license number")
     bio = models.TextField(blank=True)
     experience_years = models.PositiveIntegerField(default=0, help_text="Years of clinical midwifery experience")
     languages = models.CharField(max_length=200, default="English, Amharic", help_text="Spoken languages")
