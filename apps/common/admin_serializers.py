@@ -7,6 +7,10 @@ build plain dict payloads via admin_services helpers.
 
 from rest_framework import serializers
 
+from apps.notifications.models import Notification
+from apps.users.models import EmergencyContact, User
+from apps.midwives.models import Hospital
+
 
 class AdminDashboardTotalsSerializer(serializers.Serializer):
     """Platform-wide count summary shown at the top of the admin dashboard."""
@@ -76,3 +80,49 @@ class AdminMidwifeStatsResponseSerializer(serializers.Serializer):
     appointments_by_status = serializers.DictField(child=serializers.IntegerField())
     recent_consultations = serializers.ListField(child=serializers.DictField())
     recent_appointments = serializers.ListField(child=serializers.DictField())
+
+
+class AdminNotificationSerializer(serializers.ModelSerializer):
+    """Serializer for notifications sent by an administrator to one user."""
+
+    user_id = serializers.PrimaryKeyRelatedField(
+        source="user", queryset=User.objects.all(), write_only=True
+    )
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
+    type = serializers.ChoiceField(choices=Notification.NotificationType.choices)
+
+    class Meta:
+        model = Notification
+        fields = (
+            "id", "user", "user_id", "title", "body", "type", "action",
+            "reference_id", "is_read", "created_at",
+        )
+        read_only_fields = ("id", "user", "is_read", "created_at")
+
+
+class AdminEmergencyContactSerializer(serializers.ModelSerializer):
+    """Serializer for emergency contacts created on behalf of a user."""
+
+    user_id = serializers.PrimaryKeyRelatedField(
+        source="user", queryset=User.objects.all(), write_only=True
+    )
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = EmergencyContact
+        fields = ("id", "user", "user_id", "name", "relationship", "phone_number", "is_primary")
+        read_only_fields = ("id", "user")
+
+
+class AdminHospitalSerializer(serializers.ModelSerializer):
+    """Hospital details plus the number of linked midwife profiles."""
+
+    midwife_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Hospital
+        fields = (
+            "id", "name", "address", "phone", "latitude", "longitude",
+            "created_at", "updated_at", "midwife_count",
+        )
+        read_only_fields = ("id", "created_at", "updated_at", "midwife_count")

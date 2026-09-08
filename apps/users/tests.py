@@ -2,6 +2,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from apps.users.models import OTPVerification
 
 User = get_user_model()
@@ -366,6 +367,52 @@ class UserManagementTestCase(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["default_call_url"], "tel:0996717744")
         self.assertGreater(len(res.data["hotlines"]), 0)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AdminUserManagementTestCase(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username="user_manager_admin",
+            email="user-manager-admin@example.com",
+            password="AdminPassword123!",
+        )
+        self.patient = User.objects.create_user(
+            username="listed_patient",
+            email="listed-patient@example.com",
+            password="PatientPassword123!",
+        )
+        self.url = reverse("admin-user-list-create")
+
+    def test_only_admin_can_list_users(self):
+        self.client.force_authenticate(user=self.patient)
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {"search": "listed-patient"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get("results", response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["email"], self.patient.email)
+
+    def test_admin_can_create_midwife_user(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "provisioned-midwife@example.com",
+                "password": "SecurePassword123!",
+                "password_confirm": "SecurePassword123!",
+                "role": User.Role.MIDWIFE,
+                "first_name": "Abeba",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email="provisioned-midwife@example.com")
+        self.assertTrue(user.check_password("SecurePassword123!"))
+        self.assertEqual(user.profile.first_name, "Abeba")
+        self.assertTrue(hasattr(user, "midwife_profile"))
 
 
 

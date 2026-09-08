@@ -30,10 +30,11 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from django.utils import timezone
 
-from rest_framework import generics, permissions, status, viewsets
+from rest_framework import filters, generics, permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.views import APIView
+from django_filters.rest_framework import DjangoFilterBackend
 
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
@@ -56,12 +57,14 @@ from .serializers import (
 )
 from .models import Profile, EmergencyContact, SOSLog, UserPreference, OTPVerification
 from .user_serializers import (
+    AdminUserCreateSerializer,
     UserSerializer,
     ProfileSerializer,
     EmergencyContactSerializer,
     SOSLogSerializer,
     UserPreferenceSerializer,
 )
+from .permissions import IsAdmin
 
 User = get_user_model()
 
@@ -151,6 +154,42 @@ class UserRegistrationView(generics.CreateAPIView):
             payload["requires_admin_approval"] = True
 
         return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class AdminUserListCreateView(generics.ListCreateAPIView):
+    """List and provision user accounts for the administrator portal."""
+
+    permission_classes = [IsAdmin]
+    filterset_fields = ("role", "is_active")
+    search_fields = ("username", "email", "phone_number", "profile__first_name", "profile__last_name")
+    ordering_fields = ("username", "email", "role", "date_joined")
+    ordering = ("-date_joined",)
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
+
+    def get_queryset(self):
+        return User.objects.select_related("profile", "preferences", "midwife_profile__hospital").all()
+
+    def get_serializer_class(self):
+        return AdminUserCreateSerializer if self.request.method == "POST" else UserSerializer
+
+    @extend_schema(
+        summary="List all users",
+        description="Admin-only paginated user list. Supports `search`, `ordering`, `role`, and `is_active` query parameters.",
+        tags=["Admin"],
+    )
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Create a user",
+        description="Admin-only user provisioning. Creates the user profile and preferences automatically.",
+        tags=["Admin"],
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        return Response(UserSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
 
 
 # ---------------------------------------------------------------------------

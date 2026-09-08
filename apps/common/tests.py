@@ -5,6 +5,8 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from apps.users.models import Profile
 from apps.common.models import Facility
+from apps.notifications.models import Notification
+from apps.users.models import EmergencyContact
 
 
 User = get_user_model()
@@ -229,4 +231,93 @@ class AdminDashboardAPITestCase(APITestCase):
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AdminDirectoryManagementAPITestCase(APITestCase):
+    """Coverage for admin notifications, emergency contacts, and hospitals."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username="directory_admin",
+            email="directory-admin@example.com",
+            password="AdminPassword123!",
+        )
+        self.patient = User.objects.create_user(
+            username="contact_owner",
+            email="contact-owner@example.com",
+            password="PatientPassword123!",
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def test_admin_can_create_and_list_notification(self):
+        url = reverse("admin-notification-list-create")
+        create_response = self.client.post(
+            url,
+            {
+                "user_id": str(self.patient.id),
+                "title": "Clinic update",
+                "body": "Your clinic has updated its maternity service hours.",
+                "type": Notification.NotificationType.SYSTEM,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Notification.objects.filter(user=self.patient).count(), 1)
+
+        list_response = self.client.get(url, {"user": str(self.patient.id)})
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = list_response.data.get("results", list_response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["title"], "Clinic update")
+
+    def test_admin_can_create_and_list_emergency_contact(self):
+        url = reverse("admin-emergency-contact-list-create")
+        create_response = self.client.post(
+            url,
+            {
+                "user_id": str(self.patient.id),
+                "name": "Aster Bekele",
+                "relationship": "Mother",
+                "phone_number": "+251911123456",
+                "is_primary": True,
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(EmergencyContact.objects.filter(user=self.patient, is_primary=True).exists())
+
+        list_response = self.client.get(url, {"user": str(self.patient.id)})
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = list_response.data.get("results", list_response.data)
+        self.assertEqual(results[0]["name"], "Aster Bekele")
+
+    def test_admin_can_create_and_list_hospital(self):
+        url = reverse("admin-hospital-list-create")
+        create_response = self.client.post(
+            url,
+            {
+                "name": "Admin Provisioned Hospital",
+                "address": "Bole, Addis Ababa",
+                "phone": "+251111234567",
+                "latitude": "9.019000",
+                "longitude": "38.761000",
+            },
+            format="json",
+        )
+        self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+
+        list_response = self.client.get(url, {"search": "Provisioned"})
+        self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+        results = list_response.data.get("results", list_response.data)
+        self.assertEqual(results[0]["name"], "Admin Provisioned Hospital")
+
+    def test_non_admin_cannot_manage_admin_collections(self):
+        self.client.force_authenticate(user=self.patient)
+        for name in (
+            "admin-notification-list-create",
+            "admin-emergency-contact-list-create",
+            "admin-hospital-list-create",
+        ):
+            self.assertEqual(self.client.get(reverse(name)).status_code, status.HTTP_403_FORBIDDEN)
 

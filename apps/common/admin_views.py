@@ -5,13 +5,18 @@ These endpoints are consumed exclusively by the React admin dashboard.
 All routes require an authenticated administrator (role ADMIN + is_staff).
 """
 
-from rest_framework import status
+from rest_framework import filters, generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
+from django.db.models import Count
+from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.users.permissions import IsAdmin
+from apps.users.models import EmergencyContact
+from apps.notifications.models import Notification
 from apps.midwives.models import MidwifeProfile
+from apps.midwives.models import Hospital
 from .admin_services import (
     build_admin_dashboard_payload,
     build_midwife_stats_payload,
@@ -19,9 +24,94 @@ from .admin_services import (
     DEFAULT_MIDWIFE_RECENT_LIMIT,
 )
 from .admin_serializers import (
+    AdminEmergencyContactSerializer,
     AdminDashboardResponseSerializer,
+    AdminHospitalSerializer,
     AdminMidwifeStatsResponseSerializer,
+    AdminNotificationSerializer,
 )
+
+
+class AdminListCreateView(generics.ListCreateAPIView):
+    """Shared safeguards and query support for admin-managed collections."""
+
+    permission_classes = [IsAdmin]
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
+
+
+class AdminNotificationListCreateView(AdminListCreateView):
+    queryset = Notification.objects.select_related("user").all()
+    serializer_class = AdminNotificationSerializer
+    filterset_fields = ("user", "type", "is_read")
+    search_fields = ("title", "body", "action", "reference_id", "user__username", "user__email")
+    ordering_fields = ("created_at", "title", "type")
+    ordering = ("-created_at",)
+
+    @extend_schema(
+        summary="List notifications",
+        description="Admin-only notification list. Filter by `user`, `type`, or `is_read`; search notification content with `search`.",
+        tags=["Admin"],
+    )
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Send a notification to a user",
+        description="Admin-only. Requires `user_id`, `title`, `body`, and `type`. Optional: `action`, `reference_id`.",
+        tags=["Admin"],
+    )
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
+
+
+class AdminEmergencyContactListCreateView(AdminListCreateView):
+    queryset = EmergencyContact.objects.select_related("user").all()
+    serializer_class = AdminEmergencyContactSerializer
+    filterset_fields = ("user", "is_primary")
+    search_fields = ("name", "relationship", "phone_number", "user__username", "user__email")
+    ordering_fields = ("name", "relationship", "is_primary")
+    ordering = ("user__username", "-is_primary", "name")
+
+    @extend_schema(
+        summary="List all emergency contacts",
+        description="Admin-only. Filter by `user` or `is_primary`; use `search` for contact or owner details.",
+        tags=["Admin"],
+    )
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Create an emergency contact for a user",
+        description="Admin-only. Requires `user_id`, `name`, `relationship`, and `phone_number`.",
+        tags=["Admin"],
+    )
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
+
+
+class AdminHospitalListCreateView(AdminListCreateView):
+    # Annotate once so the dashboard's hospital table can display linked midwives.
+    queryset = Hospital.objects.annotate(midwife_count=Count("midwives"))
+    serializer_class = AdminHospitalSerializer
+    search_fields = ("name", "address", "phone")
+    ordering_fields = ("name", "created_at", "updated_at")
+    ordering = ("name",)
+
+    @extend_schema(
+        summary="List hospitals",
+        description="Admin-only hospital list. Supports `search` and `ordering`.",
+        tags=["Admin"],
+    )
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Create a hospital",
+        description="Admin-only. Requires `name`, `address`, and `phone`; optional `latitude` and `longitude`.",
+        tags=["Admin"],
+    )
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
 
 
 class AdminDashboardView(APIView):
