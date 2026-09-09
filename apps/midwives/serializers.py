@@ -66,9 +66,9 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         )
         extra_kwargs = {
-            'license_number': {'required': True, 'allow_blank': False},
+            'license_number': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'experience_years': {'required': False},
             'languages': {'required': True, 'allow_blank': False},
-            'experience_years': {'required': True},
         }
 
     def validate(self, attrs):
@@ -80,15 +80,12 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
         if not partial:
             cv_file = attrs.get('cv_file', getattr(instance, 'cv_file', None) if instance else None)
             hospital = attrs.get('hospital', instance.hospital if instance else None)
-            license_number = attrs.get('license_number', instance.license_number if instance else None)
             languages = attrs.get('languages', instance.languages if instance else None)
 
             if not cv_file:
                 errors['cv_file'] = "CV / Resume document file is required."
             if not hospital:
                 errors['hospital'] = "Affiliated Hospital facility is required."
-            if not license_number or not str(license_number).strip():
-                errors['license_number'] = "Medical license number is required."
             if not languages or not str(languages).strip():
                 errors['languages'] = "Spoken languages field is required."
 

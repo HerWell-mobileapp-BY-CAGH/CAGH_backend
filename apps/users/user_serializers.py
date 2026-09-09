@@ -40,6 +40,8 @@ class ProfileSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    first_name = serializers.CharField(required=False, allow_blank=True)
+    last_name = serializers.CharField(required=False, allow_blank=True)
     profile = ProfileSerializer(read_only=True)
     preferences = UserPreferenceSerializer(read_only=True)
     midwife_profile = serializers.SerializerMethodField(read_only=True)
@@ -48,6 +50,8 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             "id",
+            "first_name",
+            "last_name",
             "username",
             "email",
             "role",

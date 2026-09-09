@@ -1,1 +1,1 @@
-# Management package
+# Package marker

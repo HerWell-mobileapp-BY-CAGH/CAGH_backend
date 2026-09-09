@@ -1,11 +1,9 @@
 import os
 import time
-import hmac
 import hashlib
-import base64
-import struct
 import logging
 from django.conf import settings
+from .agora_token.RtcTokenBuilder2 import RtcTokenBuilder, Role_Publisher
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +18,7 @@ class Role:
 class AgoraService:
     """
     Agora RTC Token Generation Service.
-    Generates secure RTC access tokens using HMAC-SHA256 for channel authorization.
+    Generates secure RTC access tokens using the official Agora SDK token builder.
     App Certificate is kept strictly server-side on Django and NEVER sent to Flutter clients.
     """
 
@@ -29,10 +27,16 @@ class AgoraService:
         if not user_id:
             return 0
         try:
-            return int(user_id)
+            candidate = int(user_id)
         except (ValueError, TypeError):
             s = str(user_id).replace('-', '').lower()
-            return int(hashlib.md5(s.encode('utf-8')).hexdigest()[:8], 16) % 100000000
+            candidate = int(hashlib.md5(s.encode('utf-8')).hexdigest()[:8], 16)
+
+        # Agora requires uid to fit in a 32-bit unsigned integer (max 4294967295).
+        # Enforce this regardless of input size/type to prevent oversized UIDs
+        # from ever reaching the token builder.
+        safe_uid = candidate % 4294967295
+        return safe_uid if safe_uid != 0 else 1
 
     @staticmethod
     def generate_rtc_token(
@@ -42,7 +46,7 @@ class AgoraService:
         expire_seconds: int = 3600
     ) -> str:
         """
-        Generates a short-lived signed Agora RTC token for a given channel name and numeric user ID.
+        Generates a short-lived signed Agora RTC token for a given channel name and numeric user ID using RtcTokenBuilder.
         """
         app_id = getattr(settings, 'AGORA_APP_ID', os.environ.get('AGORA_APP_ID', ''))
         app_certificate = getattr(settings, 'AGORA_APP_CERTIFICATE', os.environ.get('AGORA_APP_CERTIFICATE', ''))
@@ -60,61 +64,24 @@ class AgoraService:
             logger.error(f"[AGORA SERVICE ERROR] AGORA_APP_CERTIFICATE is not configured in settings or environment.")
             raise ImproperlyConfigured("AGORA_APP_CERTIFICATE is required for signed RTC token generation.")
 
-        # Build official signed Agora RTC Access Token (Version 007 payload)
+        # Build official signed Agora RTC Access Token using AccessToken2 (v007)
         try:
-            token = AgoraService._build_token_v007(
+            token = RtcTokenBuilder.build_token_with_uid(
                 app_id=app_id,
                 app_certificate=app_certificate,
                 channel_name=channel_name,
                 uid=numeric_uid,
-                role=role,
-                privilege_expired_ts=privilege_expired_ts
+                role=Role_Publisher,  # Use Role_Publisher constant from AccessToken2
+                token_expire=expire_seconds,
+                privilege_expire=0  # 0 means same as token_expire
             )
+            token_prefix = token[:10] if token else None
+            logger.info(f"[AGORA TOKEN DEBUG] app_id={app_id} numeric_uid={numeric_uid} channel={channel_name} token_prefix={token_prefix} expires={privilege_expired_ts}")
+            logger.info(f"[AGORA DEBUG] token_prefix={token_prefix} | app_id={app_id} | uid={numeric_uid} | channel={channel_name} | role={role} | expires={privilege_expired_ts} | now={current_ts}")
+            if not token:
+                raise ValueError("RtcTokenBuilder.build_token_with_uid returned empty or None token.")
             return token
         except Exception as e:
-            logger.error(f"[AGORA SERVICE ERROR] Token generation failed: {e}")
-            return f"RTC_TOKEN_{channel_name}_{numeric_uid}_{privilege_expired_ts}"
+            logger.error(f"[AGORA SERVICE ERROR] Token generation failed: {e}", exc_info=True)
+            raise
 
-    @staticmethod
-    def _build_token_v007(app_id: str, app_certificate: str, channel_name: str, uid: int, role: int, privilege_expired_ts: int) -> str:
-        """
-        Constructs Agora RTC AccessToken Version 007 payload using HMAC-SHA256 signature.
-        """
-        version = "007"
-        raw_uid = str(uid) if uid else "0"
-
-        # Pack privileges
-        privileges = {
-            1: privilege_expired_ts,  # kJoinChannel = 1
-        }
-        if role in (Role.PUBLISHER, Role.ATTENDEE):
-            privileges[2] = privilege_expired_ts  # kPublishAudioStream = 2
-            privileges[3] = privilege_expired_ts  # kPublishVideoStream = 3
-            privileges[4] = privilege_expired_ts  # kPublishDataStream = 4
-
-        # Build signature message buffer
-        msg_buf = bytearray()
-        msg_buf.extend(app_id.encode('utf-8'))
-        msg_buf.extend(channel_name.encode('utf-8'))
-        msg_buf.extend(raw_uid.encode('utf-8'))
-
-        msg_buf.extend(struct.pack('<H', len(privileges)))
-        for k, v in sorted(privileges.items()):
-            msg_buf.extend(struct.pack('<H', k))
-            msg_buf.extend(struct.pack('<I', v))
-
-        # Sign message with HMAC-SHA256 using app_certificate
-        signature = hmac.new(app_certificate.encode('utf-8'), msg_buf, hashlib.sha256).digest()
-
-        # Format content block
-        content = bytearray()
-        content.extend(struct.pack('<H', len(signature)))
-        content.extend(signature)
-        content.extend(struct.pack('<H', len(privileges)))
-        for k, v in sorted(privileges.items()):
-            content.extend(struct.pack('<H', k))
-            content.extend(struct.pack('<I', v))
-
-        # Final Base64 token string
-        token_str = f"{version}{app_id}{base64.b64encode(content).decode('utf-8')}"
-        return token_str

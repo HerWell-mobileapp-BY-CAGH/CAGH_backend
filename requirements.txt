@@ -27,7 +27,9 @@ requests>=2.31.0
 pytest>=8.0.0
 pytest-django>=4.8.0
 
-# Notifications & Firebase
+# Notifications & Firebase & Agora
 firebase-admin>=6.5.0
+agora-token-builder>=1.0.0
+
 
 

@@ -210,6 +210,11 @@ REST_FRAMEWORK = {
         'rest_framework.filters.SearchFilter',
         'rest_framework.filters.OrderingFilter',
     ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/day',
+        'user': '1000/day',
+        'ai_chat': os.environ.get('AI_RATE_LIMIT', '20/minute'),
+    },
 }
 
 # SimpleJWT Configuration
@@ -376,3 +381,13 @@ AGORA_APP_CERTIFICATE = os.environ.get('AGORA_APP_CERTIFICATE', '')
 
 
 
+
+# Firebase Cloud Messaging & Admin SDK Configuration
+FIREBASE_SERVICE_ACCOUNT_KEY = os.environ.get('FIREBASE_SERVICE_ACCOUNT_KEY', os.path.join(BASE_DIR, 'firebase-service-account.json'))
+GOOGLE_CLOUD_PROJECT = os.environ.get('GOOGLE_CLOUD_PROJECT', 'cagh-bd916')
+
+# AI Assistant Settings (Phase 1 Foundation)
+AI_MAX_INPUT_LENGTH = int(os.environ.get('AI_MAX_INPUT_LENGTH', 1000))
+AI_MAX_OUTPUT_TOKENS = int(os.environ.get('AI_MAX_OUTPUT_TOKENS', 1024))
+AI_MAX_HISTORY_MESSAGES = int(os.environ.get('AI_MAX_HISTORY_MESSAGES', 6))
+AI_KNOWLEDGE_CONTEXT_LIMIT = int(os.environ.get('AI_KNOWLEDGE_CONTEXT_LIMIT', 3))

@@ -4,6 +4,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
 from .models import Consultation, VoiceSession, VideoSession
+from .services import VoiceCallService
 from apps.appointments.models import Appointment
 
 logger = logging.getLogger(__name__)
@@ -73,8 +74,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         # 1. Call Initiation / Ringing Alert
         if action_type in ['incoming_call', 'call_offer', 'incoming_call_offer', 'offer', 'call_initiated']:
             call_type = data.get('call_type', 'VOICE')
-
-            await self.update_call_status(self.consultation_id, call_type, 'RINGING', caller_user=user)
+            await self.process_call_service_action(self.consultation_id, user, 'START', call_type=call_type)
 
             await self.channel_layer.group_send(
                 self.group_name,
@@ -95,7 +95,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                         'type': 'broadcast_user_incoming_call',
                         'data': {
                             'type': 'incoming_call',
-                            'action': 'incoming_call',
+                            'action': 'INCOMING_CALL',
                             'consultation_id': self.consultation_id,
                             'sender_id': str(user.id),
                             'sender_name': sender_name,
@@ -106,53 +106,78 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
 
         # 2. Call Answered / Accepted
         elif action_type in ['call_accepted', 'call_answer', 'call_answered', 'incoming_call_answer', 'answer']:
+            # NOTE: The HTTP /voice-session/accept/ endpoint is the authoritative
+            # owner of the ACCEPT state transition.  When the Flutter client sends
+            # call_accepted via the consultation room WS (fallback signal path) the
+            # session is already ACCEPTED/ONGOING — calling process_call_service_action
+            # here just produces an idempotent-repeat token generation on every
+            # call_accepted relay.  Skip the service action; only relay the signal
+            # to consultation room subscribers.
             call_type = data.get('call_type', 'VOICE')
-            await self.update_call_status(self.consultation_id, call_type, 'ACCEPTED')
-
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     'type': 'broadcast_call_accepted',
                     'sender_id': str(user.id),
+                    'consultation_id': self.consultation_id,
                 }
             )
 
         # 3. Call Declined
-        elif action_type in ['call_declined', 'decline']:
+        elif action_type in ['call_declined', 'decline', 'decline_call', 'call_decline']:
             call_type = data.get('call_type', 'VOICE')
-            await self.update_call_status(self.consultation_id, call_type, 'DECLINED')
+            logger.info(f"[CALL] event=WS_DECLINE_RECEIVED consultation_id={self.consultation_id} user_id={user.id}")
+            await self.process_call_service_action(self.consultation_id, user, 'DECLINE', call_type=call_type)
 
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     'type': 'broadcast_call_declined',
                     'sender_id': str(user.id),
+                    'consultation_id': self.consultation_id,
                 }
             )
+
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            if recipient_id:
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'broadcast_user_incoming_call',
+                        'data': {
+                            'type': 'call_declined',
+                            'action': 'CALL_DECLINED',
+                            'consultation_id': self.consultation_id,
+                            'sender_id': str(user.id),
+                        }
+                    }
+                )
 
         # 4. Call Cancelled
         elif action_type in ['call_cancelled', 'cancel']:
             call_type = data.get('call_type', 'VOICE')
-            await self.update_call_status(self.consultation_id, call_type, 'CANCELLED')
+            await self.process_call_service_action(self.consultation_id, user, 'CANCEL', call_type=call_type)
 
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     'type': 'broadcast_call_cancelled',
                     'sender_id': str(user.id),
+                    'consultation_id': self.consultation_id,
                 }
             )
 
         # 5. Call Missed
         elif action_type in ['call_missed', 'missed']:
             call_type = data.get('call_type', 'VOICE')
-            await self.update_call_status(self.consultation_id, call_type, 'MISSED')
+            await self.process_call_service_action(self.consultation_id, user, 'MISSED', call_type=call_type)
 
             await self.channel_layer.group_send(
                 self.group_name,
                 {
                     'type': 'broadcast_call_missed',
                     'sender_id': str(user.id),
+                    'consultation_id': self.consultation_id,
                 }
             )
 
@@ -174,7 +199,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
         # 7. End Call
         elif action_type in ['call_ended', 'end_call']:
             call_type = data.get('call_type', 'VOICE')
-            await self.update_call_status(self.consultation_id, call_type, 'ENDED')
+            await self.process_call_service_action(self.consultation_id, user, 'END', call_type=call_type)
 
             await self.channel_layer.group_send(
                 self.group_name,
@@ -182,6 +207,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                     'type': 'broadcast_call_ended',
                     'sender_id': str(user.id),
                     'ended_at': timezone.now().isoformat(),
+                    'consultation_id': self.consultation_id,
                 }
             )
 
@@ -191,11 +217,13 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'incoming_call',
-            'action': 'incoming_call',
+            'action': 'INCOMING_CALL',
             'sender_id': event['sender_id'],
-            'sender_name': event['sender_name'],
-            'call_type': event['call_type'],
-            'consultation_id': event.get('consultation_id', self.consultation_id),
+            'sender_name': event.get('sender_name', ''),
+            'call_type': event.get('call_type', 'VOICE'),
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
+            'call_id': event.get('call_id', ''),
+            'session_id': event.get('session_id', ''),
         }))
 
     async def broadcast_call_accepted(self, event):
@@ -204,8 +232,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'call_accepted',
-            'action': 'call_accepted',
+            'action': 'CALL_ACCEPTED',
             'sender_id': event['sender_id'],
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
         }))
 
     async def broadcast_call_declined(self, event):
@@ -214,8 +243,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'call_declined',
-            'action': 'call_declined',
+            'action': 'CALL_DECLINED',
             'sender_id': event['sender_id'],
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
         }))
 
     async def broadcast_call_cancelled(self, event):
@@ -224,8 +254,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'call_cancelled',
-            'action': 'call_cancelled',
+            'action': 'CALL_CANCELLED',
             'sender_id': event['sender_id'],
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
         }))
 
     async def broadcast_call_missed(self, event):
@@ -234,8 +265,9 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'call_missed',
-            'action': 'call_missed',
+            'action': 'CALL_MISSED',
             'sender_id': event['sender_id'],
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
         }))
 
     async def broadcast_media_toggle(self, event):
@@ -244,7 +276,7 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'media_state_changed',
-            'action': 'media_state_changed',
+            'action': 'MEDIA_STATE_CHANGED',
             'sender_id': event['sender_id'],
             'is_muted': event.get('is_muted'),
             'video_enabled': event.get('video_enabled'),
@@ -256,9 +288,10 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'call_ended',
-            'action': 'call_ended',
+            'action': 'CALL_ENDED',
             'sender_id': event['sender_id'],
-            'ended_at': event['ended_at'],
+            'ended_at': event.get('ended_at'),
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
         }))
 
     async def broadcast_peer_joined(self, event):
@@ -267,10 +300,52 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             return
         await self.send(text_data=json.dumps({
             'type': 'peer_joined',
-            'action': 'peer_joined',
+            'action': 'PEER_JOINED',
             'sender_id': event['sender_id'],
-            'sender_name': event['sender_name'],
+            'sender_name': event.get('sender_name', ''),
         }))
+
+    @database_sync_to_async
+    def process_call_service_action(self, consultation_id, user, action_name, call_type="VOICE"):
+        try:
+            consultation = Consultation.objects.filter(id=consultation_id).first()
+            if not consultation:
+                appointment = Appointment.objects.filter(id=consultation_id).first()
+                if appointment and hasattr(appointment, 'consultation'):
+                    consultation = appointment.consultation
+
+            if not consultation:
+                return
+
+            if action_name == 'START':
+                VoiceCallService.start_call(consultation, user, call_type=call_type, broadcast_ws=False)
+            elif action_name == 'ACCEPT':
+                VoiceCallService.accept_call(consultation, user, broadcast_ws=False)
+            elif action_name == 'DECLINE':
+                VoiceCallService.decline_call(consultation, user, broadcast_ws=False)
+            elif action_name == 'CANCEL':
+                VoiceCallService.cancel_call(consultation, user, broadcast_ws=False)
+            elif action_name == 'MISSED':
+                VoiceCallService.missed_call(consultation, user, broadcast_ws=False)
+            elif action_name == 'END':
+                VoiceCallService.end_call(consultation, user, broadcast_ws=False)
+        except Exception as e:
+            logger.error(f"[CALL] event=WS_ACTION_ERROR action={action_name} consultation_id={consultation_id} error={e}")
+
+    @database_sync_to_async
+    def get_recipient_user_id(self, consultation_id, user):
+        try:
+            consultation = Consultation.objects.filter(id=consultation_id).first()
+            if not consultation:
+                appointment = Appointment.objects.filter(id=consultation_id).first()
+                if appointment and hasattr(appointment, 'consultation'):
+                    consultation = appointment.consultation
+            if not consultation:
+                return None
+            _, _, recipient = VoiceCallService.verify_and_resolve_participants(consultation, user)
+            return str(recipient.id) if recipient else None
+        except Exception:
+            return None
 
     @database_sync_to_async
     def get_canonical_consultation_id(self, raw_id):
@@ -323,68 +398,6 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             logger.error(f"[WS MEMBERSHIP CHECK ERROR] Failed for user {getattr(user, 'id', None)}: {e}")
             return False
 
-    @database_sync_to_async
-    def update_call_status(self, consultation_id, call_type, status_val, caller_user=None):
-        try:
-            consultation = Consultation.objects.filter(id=consultation_id).first()
-            if not consultation:
-                appointment = Appointment.objects.filter(id=consultation_id).first()
-                if appointment and hasattr(appointment, 'consultation'):
-                    consultation = appointment.consultation
-
-            if not consultation:
-                return
-
-            now = timezone.now()
-
-            if call_type == 'VOICE' and hasattr(consultation, 'voice_session'):
-                session = consultation.voice_session
-                session.status = status_val
-                if caller_user and not session.caller:
-                    session.caller = caller_user
-                if status_val in ['ACCEPTED', 'ONGOING'] and not session.started_at:
-                    session.started_at = now
-                elif status_val in ['ENDED', 'DECLINED', 'CANCELLED', 'MISSED']:
-                    session.ended_at = now
-                session.save()
-
-            elif call_type == 'VIDEO' and hasattr(consultation, 'video_session'):
-                session = consultation.video_session
-                session.status = status_val
-                if status_val in ['ACCEPTED', 'ONGOING'] and not session.started_at:
-                    session.started_at = now
-                elif status_val in ['ENDED', 'DECLINED', 'CANCELLED', 'MISSED']:
-                    session.ended_at = now
-                session.save()
-
-        except Exception:
-            pass
-
-    @database_sync_to_async
-    def get_recipient_user_id(self, consultation_id, sender_user):
-        try:
-            sender_id = str(getattr(sender_user, 'id', ''))
-
-            patient_id = ''
-            midwife_user_id = ''
-
-            consultation = Consultation.objects.filter(id=consultation_id).first()
-            if not consultation:
-                appointment = Appointment.objects.filter(id=consultation_id).first()
-                if appointment:
-                    patient_id = str(appointment.user.id) if appointment.user else ''
-                    midwife_user_id = str(appointment.midwife.user.id) if (appointment.midwife and hasattr(appointment.midwife, 'user') and appointment.midwife.user) else ''
-            else:
-                patient_id = str(consultation.user.id) if consultation.user else ''
-                midwife_user_id = str(consultation.midwife.user.id) if (consultation.midwife and hasattr(consultation.midwife, 'user') and consultation.midwife.user) else ''
-
-            recipient_id = midwife_user_id if sender_id == patient_id else patient_id
-            if recipient_id and recipient_id != sender_id:
-                return recipient_id
-        except Exception:
-            pass
-        return None
-
 
 class UserCallConsumer(AsyncWebsocketConsumer):
     """
@@ -425,10 +438,79 @@ class UserCallConsumer(AsyncWebsocketConsumer):
             pass
 
     async def broadcast_user_incoming_call(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_signal(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_declined(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_ended(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_cancelled(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_accepted(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_offer(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def incoming_call(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def _deliver_user_call_signal(self, data_or_event):
+        if not isinstance(data_or_event, dict):
+            return
+
+        data = data_or_event.get('data') if isinstance(data_or_event.get('data'), dict) else data_or_event
+
         user = self.scope.get('user')
-        data = event.get('data', {})
-        sender_id = str(data.get('sender_id', ''))
-        if user and sender_id and sender_id == str(user.id):
+        sender_id = str(data.get('caller_id') or data.get('sender_id') or data_or_event.get('sender_id') or '')
+        user_id_str = str(getattr(user, 'id', ''))
+        if user and sender_id and sender_id == user_id_str:
             return  # Strictly ignore self-call notification
-        await self.send(text_data=json.dumps(data))
+
+        action = data.get('action') or data.get('type') or data_or_event.get('action') or data_or_event.get('type') or 'call_offer'
+        call_id = data.get('call_id') or data.get('session_id') or data.get('session_key') or data_or_event.get('call_id') or ''
+
+        action_log = action.upper()
+        if 'ACCEPT' in action_log:
+            action_log = 'ACCEPT'
+        elif 'DECLINE' in action_log or 'REJECT' in action_log:
+            action_log = 'DECLINE'
+        elif 'END' in action_log or 'CANCEL' in action_log:
+            action_log = 'END'
+
+        logger.info(f"[CALL-ACTION] source=WEBSOCKET action={action_log} event=SIGNAL_DELIVERED call_id={call_id} user_id={user_id_str}")
+        logger.info(f"[WS] event=CALL_SIGNAL_DELIVERED user={user_id_str} action={action} call_id={call_id}")
+
+        payload = {
+            "action": action,
+            "event": data.get("event", action),
+            "call_id": call_id,
+            "session_id": call_id,
+            "session_key": call_id,
+            "consultation_id": str(data.get("consultation_id", "") or data_or_event.get("consultation_id", "")),
+            "appointment_id": str(data.get("appointment_id", "") or data_or_event.get("appointment_id", "")),
+            "caller_id": sender_id,
+            "receiver_id": str(data.get("receiver_id") or data.get("recipient_id") or user_id_str),
+            "recipient_id": str(data.get("recipient_id") or data.get("receiver_id") or user_id_str),
+            "caller_name": data.get("caller_name") or data.get("sender_name") or "Caller",
+            "receiver_name": data.get("receiver_name") or data.get("recipient_name") or "",
+            "recipient_name": data.get("recipient_name") or data.get("receiver_name") or "",
+            "call_type": data.get("call_type", "VOICE"),
+            "agora_channel_name": data.get("agora_channel_name") or "",
+            "agora_app_id": data.get("agora_app_id") or "",
+            "timestamp": data.get("timestamp") or str(int(timezone.now().timestamp())),
+        }
+        if "status" in data or "status" in data_or_event:
+            payload["status"] = data.get("status") or data_or_event.get("status")
+        if "ended_at" in data or "ended_at" in data_or_event:
+            payload["ended_at"] = data.get("ended_at") or data_or_event.get("ended_at")
+
+        await self.send(text_data=json.dumps(payload))
+
 

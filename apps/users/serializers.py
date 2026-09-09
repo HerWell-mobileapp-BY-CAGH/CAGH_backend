@@ -197,7 +197,11 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             username = f"{base_username}_{uuid.uuid4().hex[:6]}"
             validated_data["username"] = username
 
-        user = User(**validated_data)
+        user = User(
+            first_name=first_name,
+            last_name=last_name,
+            **validated_data
+        )
         if password:
             user.set_password(password)
         else:
@@ -213,12 +217,19 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             gender=gender,
             region=region,
         )
-        UserPreference.objects.create(user=user)
+        license_number = (self.initial_data.get("license_number") if hasattr(self, 'initial_data') and isinstance(self.initial_data, dict) else None)
 
         if user.role == User.Role.MIDWIFE:
             from apps.midwives.models import MidwifeProfile
+            defaults = {
+                "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+            }
+            if license_number and str(license_number).strip():
+                defaults["license_number"] = str(license_number).strip()
+
             MidwifeProfile.objects.get_or_create(
                 user=user,
+                defaults=defaults
                 defaults={
                     "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
                     "verification_status": MidwifeProfile.VerificationStatus.PENDING,

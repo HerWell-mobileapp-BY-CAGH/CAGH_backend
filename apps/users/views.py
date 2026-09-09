@@ -133,6 +133,22 @@ class UserRegistrationView(generics.CreateAPIView):
 
         tokens = _token_pair_for(user)
 
+        return Response(
+            {
+                "message": "Account created successfully.",
+                "user": {
+                    "id": str(user.id),
+                    "first_name": user.first_name or (user.profile.first_name if hasattr(user, 'profile') else ""),
+                    "last_name": user.last_name or (user.profile.last_name if hasattr(user, 'profile') else ""),
+                    "username": user.username,
+                    "email": user.email,
+                    "role": user.role,
+                    "phone_number": user.phone_number,
+                },
+                **tokens,
+            },
+            status=status.HTTP_201_CREATED,
+        )
         payload = {
             "message": "Account created successfully.",
             "user": {
@@ -376,12 +392,11 @@ class OTPLoginView(APIView):
         # Auto-heal: If user.role is MIDWIFE but lacks MidwifeProfile, create default profile
         if user.role == User.Role.MIDWIFE and not hasattr(user, 'midwife_profile'):
             from apps.midwives.models import MidwifeProfile
-            import uuid
             MidwifeProfile.objects.get_or_create(
                 user=user,
                 defaults={
-                    "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
                     "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                    "license_number": f"LIC-{user.id.hex[:8].upper()}",
                     "is_accepting_bookings": False,
                 }
             )
