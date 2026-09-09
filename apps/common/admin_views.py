@@ -13,7 +13,7 @@ from django.db.models import Count
 from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.users.permissions import IsAdmin
-from apps.users.models import EmergencyContact
+from apps.users.models import EmergencyContact, Profile
 from apps.notifications.models import Notification
 from apps.midwives.models import MidwifeProfile
 from apps.midwives.models import Hospital
@@ -25,6 +25,7 @@ from .admin_services import (
 )
 from .admin_serializers import (
     AdminEmergencyContactSerializer,
+    AdminLanguagePreferenceSerializer,
     AdminDashboardResponseSerializer,
     AdminHospitalSerializer,
     AdminMidwifeStatsResponseSerializer,
@@ -112,6 +113,36 @@ class AdminHospitalListCreateView(AdminListCreateView):
     )
     def post(self, request, *args, **kwargs):
         return self.create(request, *args, **kwargs)
+
+
+class AdminLanguagePreferenceView(generics.RetrieveUpdateAPIView):
+    """Read or change the authenticated administrator's admin-UI language."""
+
+    permission_classes = [IsAdmin]
+    serializer_class = AdminLanguagePreferenceSerializer
+
+    def get_object(self):
+        # Older admin accounts may pre-date Profile creation.  Create the
+        # profile on demand so language switching always works for an admin.
+        profile, _ = Profile.objects.get_or_create(user=self.request.user)
+        return profile
+
+    @extend_schema(
+        summary="Get admin language preference",
+        description="Admin-only. Returns the language used by the admin interface (`en` or `am`).",
+        tags=["Admin"],
+    )
+    def get(self, request, *args, **kwargs):
+        return self.retrieve(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Change admin language preference",
+        description="Admin-only. Send `{\"preferred_language\": \"en\"}` or `{\"preferred_language\": \"am\"}`.",
+        tags=["Admin"],
+    )
+    def patch(self, request, *args, **kwargs):
+        # Profile.Language choices validate the same language codes as the app form.
+        return self.partial_update(request, *args, **kwargs)
 
 
 class AdminDashboardView(APIView):

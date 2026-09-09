@@ -205,7 +205,12 @@ class AdminUserListCreateView(generics.ListCreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        return Response(UserSerializer(user, context=self.get_serializer_context()).data, status=status.HTTP_201_CREATED)
+        payload = UserSerializer(user, context=self.get_serializer_context()).data
+        # Generated credentials are displayed once here and never in user lists.
+        if serializer.temporary_password:
+            payload["temporary_password"] = serializer.temporary_password
+            payload["must_change_password"] = True
+        return Response(payload, status=status.HTTP_201_CREATED)
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +494,7 @@ class PasswordChangeView(APIView):
 
         user = request.user
         user.set_password(serializer.validated_data["new_password"])
+        user.must_change_password = False
         user.save()
 
         tokens = _token_pair_for(user)
@@ -573,6 +579,7 @@ class PasswordResetConfirmView(APIView):
 
         user = serializer.validated_data["user"]
         user.set_password(serializer.validated_data["new_password"])
+        user.must_change_password = False
         user.save()
 
         return Response(
@@ -675,6 +682,7 @@ class PasswordResetOTPConfirmView(APIView):
         otp_record = serializer.validated_data["otp_record"]
 
         user.set_password(serializer.validated_data["new_password"])
+        user.must_change_password = False
         user.save()
 
         otp_record.is_verified = True

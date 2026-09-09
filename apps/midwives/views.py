@@ -19,6 +19,7 @@ from .serializers import (
     BlockedDateSerializer,
     MidwifeDashboardSerializer,
     MidwifeApplicationDetailSerializer,
+    AdminMidwifeApplicationUpdateSerializer,
     MidwifeReviewActionSerializer,
 )
 from .utils import notify_midwife_review_result
@@ -400,8 +401,8 @@ class MidwifeApplicationListView(generics.ListAPIView):
         return super().get(request, *args, **kwargs)
 
 
-class MidwifeApplicationDetailView(generics.RetrieveAPIView):
-    """Admin-only detailed view of a single midwife application."""
+class MidwifeApplicationDetailView(generics.RetrieveUpdateAPIView):
+    """Admin-only application review and credential-completion endpoint."""
 
     serializer_class = MidwifeApplicationDetailSerializer
     permission_classes = [IsAdmin]
@@ -413,12 +414,36 @@ class MidwifeApplicationDetailView(generics.RetrieveAPIView):
             .prefetch_related("qualifications", "certificates", "expertises")
         )
 
+    def get_serializer_class(self):
+        return AdminMidwifeApplicationUpdateSerializer if self.request.method == "PATCH" else MidwifeApplicationDetailSerializer
+
     @extend_schema(
         summary="Retrieve full midwife application details for admin review",
         tags=["Midwives"],
     )
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Complete or correct a midwife application",
+        description="Admin-only multipart PATCH. Upload `cv_file` and/or set `license_number`, `hospital_id`, `bio`, `experience_years`, `specialty`, and `languages` before approval.",
+        request=AdminMidwifeApplicationUpdateSerializer,
+        responses={200: MidwifeApplicationDetailSerializer},
+        tags=["Midwives"],
+    )
+    def patch(self, request, *args, **kwargs):
+        application = self.get_object()
+        serializer = self.get_serializer(application, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        # Audit which credentials were manually supplied, not file contents.
+        log_audit(
+            user=request.user,
+            action="MIDWIFE_APPLICATION_DETAILS_UPDATED",
+            request=request,
+            details={"midwife_id": str(application.id), "updated_fields": list(serializer.validated_data.keys())},
+        )
+        return Response(MidwifeApplicationDetailSerializer(application, context={"request": request}).data)
 
 
 class MidwifeApplicationReviewView(APIView):

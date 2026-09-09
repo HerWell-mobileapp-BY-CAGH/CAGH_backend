@@ -12,6 +12,7 @@ from apps.users.models import EmergencyContact
 User = get_user_model()
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class LanguageSelectionTestCase(APITestCase):
 
     def test_list_supported_languages(self):
@@ -312,12 +313,30 @@ class AdminDirectoryManagementAPITestCase(APITestCase):
         results = list_response.data.get("results", list_response.data)
         self.assertEqual(results[0]["name"], "Admin Provisioned Hospital")
 
+    def test_admin_can_get_and_change_admin_language(self):
+        """The admin dashboard can use the same supported language choices as the app."""
+        url = reverse("admin-language-preference")
+
+        get_response = self.client.get(url)
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(get_response.data["preferred_language"], "en")
+
+        patch_response = self.client.patch(
+            url, {"preferred_language": "am"}, format="json"
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(patch_response.data["preferred_language"], "am")
+
+        self.admin.profile.refresh_from_db()
+        self.assertEqual(self.admin.profile.preferred_language, "am")
+
     def test_non_admin_cannot_manage_admin_collections(self):
         self.client.force_authenticate(user=self.patient)
         for name in (
             "admin-notification-list-create",
             "admin-emergency-contact-list-create",
             "admin-hospital-list-create",
+            "admin-language-preference",
         ):
             self.assertEqual(self.client.get(reverse(name)).status_code, status.HTTP_403_FORBIDDEN)
 

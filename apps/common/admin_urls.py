@@ -11,6 +11,7 @@ from .admin_views import (
     AdminDashboardView,
     AdminEmergencyContactListCreateView,
     AdminHospitalListCreateView,
+    AdminLanguagePreferenceView,
     AdminMidwifeStatsView,
     AdminNotificationListCreateView,
 )
@@ -21,6 +22,8 @@ urlpatterns = [
     path("notifications/", AdminNotificationListCreateView.as_view(), name="admin-notification-list-create"),
     path("emergency-contacts/", AdminEmergencyContactListCreateView.as_view(), name="admin-emergency-contact-list-create"),
     path("hospitals/", AdminHospitalListCreateView.as_view(), name="admin-hospital-list-create"),
+    # Kept in the admin namespace so dashboard clients need no user-side route.
+    path("language/", AdminLanguagePreferenceView.as_view(), name="admin-language-preference"),
     path("dashboard/", AdminDashboardView.as_view(), name="admin-dashboard"),
     path(
         "midwives/<uuid:pk>/stats/",

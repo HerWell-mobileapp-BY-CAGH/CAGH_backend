@@ -1,7 +1,9 @@
 from django.urls import reverse
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework_simplejwt.tokens import RefreshToken
 from apps.midwives.models import MidwifeProfile, Hospital, Qualification, Certificate, BlockedDate
 from apps.notifications.models import Notification
@@ -9,6 +11,7 @@ from apps.notifications.models import Notification
 User = get_user_model()
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class MidwifeManagementTestCase(APITestCase):
 
     def setUp(self):
@@ -84,6 +87,40 @@ class MidwifeManagementTestCase(APITestCase):
         self.midwife_profile.refresh_from_db()
         self.assertEqual(self.midwife_profile.verification_status, "SUSPENDED")
         self.assertIn("audit", self.midwife_profile.suspension_reason)
+
+    def test_admin_can_complete_missing_application_credentials(self):
+        """Admin can supply a CV and professional fields omitted at sign-up."""
+        self.client.force_authenticate(user=self.admin)
+        application = MidwifeProfile.objects.create(
+            user=User.objects.create_user(
+                username="incomplete_midwife",
+                email="incomplete-midwife@example.com",
+                password="MidwifePassword123!",
+                role="MIDWIFE",
+            ),
+            license_number=None,
+            hospital=None,
+            bio="",
+            experience_years=0,
+        )
+        response = self.client.patch(
+            reverse("midwife-application-detail", kwargs={"pk": application.id}),
+            {
+                "license_number": "MW-MANUAL-001",
+                "hospital_id": str(self.hospital.id),
+                "bio": "Administrator-completed profile.",
+                "experience_years": 4,
+                "cv_file": SimpleUploadedFile("cv.pdf", b"test CV", content_type="application/pdf"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        application.refresh_from_db()
+        self.assertEqual(application.license_number, "MW-MANUAL-001")
+        self.assertEqual(application.hospital, self.hospital)
+        self.assertEqual(application.experience_years, 4)
+        # Storage may add a suffix when a previous test file has the same name.
+        self.assertTrue(application.cv_file.name)
 
     def test_midwife_dashboard(self):
         self.client.force_authenticate(user=self.midwife_user)

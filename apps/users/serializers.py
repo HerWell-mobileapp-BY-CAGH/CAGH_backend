@@ -229,9 +229,13 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
             MidwifeProfile.objects.get_or_create(
                 user=user,
-                defaults=defaults
+                # Keep the submitted licence number when supplied; otherwise
+                # create a valid placeholder for the existing unique field.
                 defaults={
-                    "license_number": f"LIC-{uuid.uuid4().hex[:8].upper()}",
+                    **defaults,
+                    "license_number": defaults.get(
+                        "license_number", f"LIC-{uuid.uuid4().hex[:8].upper()}"
+                    ),
                     "verification_status": MidwifeProfile.VerificationStatus.PENDING,
                     "is_accepting_bookings": False,
                 }

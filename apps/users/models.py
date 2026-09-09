@@ -38,6 +38,9 @@ class User(AbstractUser):
     email = models.EmailField(_('email address'), unique=True, null=True, blank=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.PATIENT)
     phone_number = models.CharField(max_length=20, unique=True, null=True, blank=True)
+    # Admin-provisioned accounts use this flag to prompt a password change
+    # after their one-time temporary password is used.
+    must_change_password = models.BooleanField(default=False)
 
     # This makes `createsuperuser` valid for both Django's /admin/ and the
     # administrator JWT sign-in endpoint.

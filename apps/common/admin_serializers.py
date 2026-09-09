@@ -8,7 +8,7 @@ build plain dict payloads via admin_services helpers.
 from rest_framework import serializers
 
 from apps.notifications.models import Notification
-from apps.users.models import EmergencyContact, User
+from apps.users.models import EmergencyContact, Profile, User
 from apps.midwives.models import Hospital
 
 
@@ -126,3 +126,11 @@ class AdminHospitalSerializer(serializers.ModelSerializer):
             "created_at", "updated_at", "midwife_count",
         )
         read_only_fields = ("id", "created_at", "updated_at", "midwife_count")
+
+
+class AdminLanguagePreferenceSerializer(serializers.ModelSerializer):
+    """The signed-in administrator's language preference for the admin UI."""
+
+    class Meta:
+        model = Profile
+        fields = ("preferred_language",)

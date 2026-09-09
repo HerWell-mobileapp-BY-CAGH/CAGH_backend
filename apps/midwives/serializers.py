@@ -172,6 +172,31 @@ class MidwifeApplicationDetailSerializer(MidwifeProfileSerializer):
         return obj.cv_file.url
 
 
+class AdminMidwifeApplicationUpdateSerializer(serializers.ModelSerializer):
+    """Admin-only fields used to complete an incomplete midwife application."""
+
+    hospital_id = serializers.PrimaryKeyRelatedField(
+        source="hospital", queryset=Hospital.objects.all(), required=False,
+        allow_null=True, write_only=True,
+    )
+    cv_file_url = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = MidwifeProfile
+        fields = (
+            "license_number", "cv_file", "cv_file_url", "hospital", "hospital_id",
+            "bio", "experience_years", "specialty", "languages",
+            "offered_consultation_types", "consultation_fee",
+        )
+        read_only_fields = ("hospital", "cv_file_url")
+
+    def get_cv_file_url(self, obj):
+        if not obj.cv_file:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(obj.cv_file.url) if request else obj.cv_file.url
+
+
 class MidwifeReviewActionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(choices=["APPROVE", "REJECT", "SUSPEND"])
     reason = serializers.CharField(

@@ -429,5 +429,40 @@ class AdminUserManagementTestCase(APITestCase):
         self.assertEqual(user.profile.first_name, "Abeba")
         self.assertTrue(hasattr(user, "midwife_profile"))
 
+    def test_admin_can_issue_temporary_password(self):
+        """A generated credential is returned once and marked for replacement."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "temporary-password@example.com",
+                "role": User.Role.PATIENT,
+                "generate_temporary_password": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        temporary_password = response.data["temporary_password"]
+        user = User.objects.get(email="temporary-password@example.com")
+        self.assertTrue(user.check_password(temporary_password))
+        self.assertTrue(user.must_change_password)
+
+    def test_admin_can_provision_an_administrator(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "new-admin@example.com",
+                "password": "NewAdminPassword123!",
+                "password_confirm": "NewAdminPassword123!",
+                "role": User.Role.ADMIN,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        new_admin = User.objects.get(email="new-admin@example.com")
+        self.assertEqual(new_admin.role, User.Role.ADMIN)
+        self.assertTrue(new_admin.is_staff)
+
 
 
