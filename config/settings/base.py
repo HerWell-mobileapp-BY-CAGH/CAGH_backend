@@ -125,12 +125,15 @@ if 'test' in sys.argv:
         }
     }
 elif os.environ.get('DATABASE_URL'):
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
     DATABASES = {
         'default': dj_database_url.config(
-            conn_max_age=600,
+            conn_max_age=conn_max_age,
             conn_health_checks=True,
         )
     }
+    if os.environ.get('DISABLE_SERVER_SIDE_CURSORS', '').lower() == 'true':
+        DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 else:
     DB_NAME = os.environ.get('POSTGRES_DB', 'cagh_db')
     DB_USER = os.environ.get('POSTGRES_USER', 'cagh_user')
@@ -145,6 +148,7 @@ else:
     DB_HOST = os.environ.get('POSTGRES_HOST', 'localhost')
     DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
 
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
@@ -153,8 +157,12 @@ else:
             'PASSWORD': DB_PASSWORD,
             'HOST': DB_HOST,
             'PORT': DB_PORT,
+            'CONN_MAX_AGE': conn_max_age,
+            'CONN_HEALTH_CHECKS': True,
         }
     }
+    if os.environ.get('DISABLE_SERVER_SIDE_CURSORS', '').lower() == 'true':
+        DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 
 # Password validation
