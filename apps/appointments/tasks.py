@@ -8,9 +8,8 @@ from apps.notifications.models import Notification
 @shared_task
 def send_automated_appointment_reminders():
     """
-    FR-013: Automated Celery background task for sending appointment reminders.
-    Triggered periodically (e.g. every 15 mins).
-    Sends 24-hour and 1-hour advance reminders to both Patient and Midwife.
+    Automated Celery background task for sending appointment reminders.
+    Triggered periodically to send 24-hour and 1-hour advance reminders to both Patient and Midwife.
     """
     now = timezone.now()
     today_date = now.date()

@@ -31,7 +31,7 @@ SUPPORTED_LANGUAGES = [
 
 class LanguageListView(APIView):
     """
-    FR-000 Initial Language Selection: Display supported languages (English, Amharic).
+    Returns list of supported application languages (English, Amharic).
     """
 
     permission_classes = [permissions.AllowAny]
@@ -54,7 +54,7 @@ class LanguageListView(APIView):
 
 class LanguageSelectView(APIView):
     """
-    FR-000 Initial Language Selection: Save language preference.
+    Saves language preference for current session or authenticated user.
     """
 
     permission_classes = [permissions.AllowAny]
@@ -243,9 +243,8 @@ def _fetch_google_place_details(place_id):
 
 class FacilityViewSet(viewsets.ModelViewSet):
     """
-    3.11 Health Facility Locator Module
-    FR-027: Healthcare Facility Search & Filtering (Google Places API + Local DB)
-    FR-028: Facility Information, Contact & Navigation Directions
+    Health Facility Locator Module.
+    Handles healthcare facility search, geolocation filtering, and navigation details.
     """
 
     queryset = Facility.objects.filter(is_active=True)

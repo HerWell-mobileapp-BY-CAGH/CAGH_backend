@@ -19,7 +19,7 @@ class SafetyResult:
 
 class SafetyService:
     """
-    FR-005 Deterministic, Context-Aware, Tiered Safety Engine for HerWell/CAGH.
+    Deterministic, Context-Aware, Tiered Safety Engine for HerWell/CAGH.
     
     Triage Hierarchy:
     1. SELF_HARM_IMMEDIATE        (Priority 100, EMERGENCY, requires_sos=True)

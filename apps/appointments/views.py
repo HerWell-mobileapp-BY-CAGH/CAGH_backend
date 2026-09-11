@@ -14,10 +14,9 @@ from apps.notifications.models import Notification
 
 def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_UPDATE"):
     """
-    Sends dual-side in-app notifications to both Patient (User) and Assigned Midwife.
-    FR-013 Notification requirement.
+    Sends in-app notifications to both the patient and assigned midwife.
     """
-    # 1. Patient Notification
+    # Patient Notification
     Notification.objects.create(
         user=appointment.user,
         title=title,
@@ -27,7 +26,7 @@ def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_
         reference_id=str(appointment.id),
     )
 
-    # 2. Midwife Notification
+    # Midwife Notification
     if appointment.midwife and appointment.midwife.user:
         Notification.objects.create(
             user=appointment.midwife.user,
@@ -41,7 +40,7 @@ def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_
 
 class AvailabilityViewSet(viewsets.ModelViewSet):
     """
-    FR-011: Midwife Recurring Working Hours Availability.
+    Manages midwife working hours availability schedules.
     """
 
     queryset = Availability.objects.all()
@@ -83,9 +82,8 @@ def _to_ethiopian_time(t):
 
 class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    FR-011: Appointment Availability Generator.
-    Returns available 30-min time slots for a midwife on a specific date.
-    Filters out midwife leave/holidays and existing appointment bookings.
+    Generates available 30-minute time slots for a midwife on a target date,
+    accounting for working hours, blocked dates, and existing bookings.
     """
 
     queryset = TimeSlot.objects.all()
@@ -204,9 +202,7 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
 
 class AppointmentViewSet(viewsets.ModelViewSet):
     """
-    FR-010: Appointment Booking
-    FR-012: Appointment Management (Reschedule, Cancel, Confirm, Complete)
-    FR-013: Immediate & Reminders Dual-Side Notifications
+    Handles appointment creation, scheduling, status updates, and notifications.
     """
 
     queryset = Appointment.objects.all().select_related('user', 'midwife', 'midwife__user')
@@ -237,7 +233,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             fee=fee if fee is not None else 0.00
         )
 
-        # Dual-side notification immediately after booking (FR-013)
+        # Send dual-side notification
         _notify_user_and_midwife(
             appointment,
             title="New Appointment Scheduled",
@@ -265,7 +261,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment.status = Appointment.AppointmentStatus.CANCELLED
         appointment.save()
 
-        # Dual-side notification (FR-013)
+        # Notify patient and midwife
         _notify_user_and_midwife(
             appointment,
             title="Appointment Cancelled",
@@ -308,7 +304,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         updated_apt = serializer.save()
 
-        # Dual-side notification (FR-013)
+        # Notify patient and midwife
         _notify_user_and_midwife(
             updated_apt,
             title="Appointment Rescheduled",

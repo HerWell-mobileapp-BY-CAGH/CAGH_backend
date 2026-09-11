@@ -699,8 +699,7 @@ class EmergencyContactViewSet(viewsets.ModelViewSet):
 
 class SOSLogViewSet(viewsets.ModelViewSet):
     """
-    3.8 Emergency Assistance Module
-    FR-026 Emergency SOS
+    Emergency Assistance Module.
     Provides persistent access to emergency hotlines (tel:907, tel:991, tel:952),
     logs GPS location, and alerts saved emergency contacts.
     """
