@@ -6,6 +6,37 @@ from apps.notifications.models import Notification
 from apps.notifications.call_notifications import send_general_push_notification
 
 
+def _format_appointment_info(appointment):
+    raw_type = appointment.appointment_type
+    if raw_type == 'IN_PERSON':
+        type_str = "In-Person"
+    elif raw_type == 'VIRTUAL_VOICE':
+        type_str = "Voice Call"
+    elif raw_type == 'VIRTUAL_VIDEO':
+        type_str = "Video Call"
+    else:
+        type_str = appointment.get_appointment_type_display()
+
+    today = timezone.localdate()
+    apt_date = appointment.scheduled_date
+    if apt_date == today:
+        date_str = "Today"
+    elif apt_date == today + timedelta(days=1):
+        date_str = "Tomorrow"
+    else:
+        date_str = apt_date.strftime("%a, %b %d")
+
+    time_str = appointment.start_time.strftime("%I:%M %p").lstrip('0') if appointment.start_time else ""
+
+    patient_name = appointment.user.get_full_name() or appointment.user.username
+    if appointment.midwife and appointment.midwife.user:
+        midwife_name = appointment.midwife.user.get_full_name() or appointment.midwife.user.username
+    else:
+        midwife_name = "Midwife"
+
+    return type_str, date_str, time_str, patient_name, midwife_name
+
+
 @shared_task
 def send_automated_appointment_reminders():
     """
@@ -25,8 +56,10 @@ def send_automated_appointment_reminders():
     reminders_sent = 0
 
     for apt in upcoming_24h:
-        title_pat = "Upcoming Appointment Reminder (24 Hours)"
-        body_pat = f"Reminder: You have an appointment ({apt.appointment_number}) tomorrow at {apt.start_time.strftime('%H:%M')}."
+        type_str, date_str, time_str, patient_name, midwife_name = _format_appointment_info(apt)
+
+        title_pat = "Upcoming Appointment Reminder ⏰"
+        body_pat = f"Reminder: You have an {type_str} consultation with Midwife {midwife_name} tomorrow at {time_str}."
 
         notif_pat, created_pat = Notification.objects.get_or_create(
             user=apt.user,
@@ -48,8 +81,8 @@ def send_automated_appointment_reminders():
 
         # Midwife Reminder
         if apt.midwife and apt.midwife.user:
-            title_mw = "Midwife Appointment Reminder (24 Hours)"
-            body_mw = f"Reminder: You have an appointment ({apt.appointment_number}) with {apt.user.username} tomorrow at {apt.start_time.strftime('%H:%M')}."
+            title_mw = "Upcoming Consultation Reminder ⏰"
+            body_mw = f"Reminder: You have an {type_str} consultation with {patient_name} tomorrow at {time_str}."
 
             notif_mw, created_mw = Notification.objects.get_or_create(
                 user=apt.midwife.user,
@@ -82,8 +115,10 @@ def send_automated_appointment_reminders():
     )
 
     for apt in today_1h:
-        title_pat = "Appointment Reminder (1 Hour)"
-        body_pat = f"Reminder: Your consultation ({apt.appointment_number}) starts in less than an hour at {apt.start_time.strftime('%H:%M')}."
+        type_str, date_str, time_str, patient_name, midwife_name = _format_appointment_info(apt)
+
+        title_pat = "Consultation Starting Soon ⏰"
+        body_pat = f"Reminder: Your {type_str} consultation with Midwife {midwife_name} starts in less than an hour at {time_str}."
 
         notif_pat, created_pat = Notification.objects.get_or_create(
             user=apt.user,
@@ -105,8 +140,8 @@ def send_automated_appointment_reminders():
 
         # Midwife Reminder
         if apt.midwife and apt.midwife.user:
-            title_mw = "Midwife Consultation Starting Soon (1 Hour)"
-            body_mw = f"Reminder: Consultation ({apt.appointment_number}) with {apt.user.username} starts at {apt.start_time.strftime('%H:%M')}."
+            title_mw = "Consultation Starting Soon ⏰"
+            body_mw = f"Reminder: Your {type_str} consultation with {patient_name} starts in less than an hour at {time_str}."
 
             notif_mw, created_mw = Notification.objects.get_or_create(
                 user=apt.midwife.user,

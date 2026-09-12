@@ -13,23 +13,87 @@ from apps.notifications.models import Notification
 from apps.notifications.call_notifications import send_general_push_notification
 
 
-def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_UPDATE"):
+def _format_appointment_info(appointment):
+    raw_type = appointment.appointment_type
+    if raw_type == 'IN_PERSON':
+        type_str = "In-Person"
+    elif raw_type == 'VIRTUAL_VOICE':
+        type_str = "Voice Call"
+    elif raw_type == 'VIRTUAL_VIDEO':
+        type_str = "Video Call"
+    else:
+        type_str = appointment.get_appointment_type_display()
+
+    today = timezone.localdate()
+    apt_date = appointment.scheduled_date
+    if apt_date == today:
+        date_str = "Today"
+    elif apt_date == today + timedelta(days=1):
+        date_str = "Tomorrow"
+    else:
+        date_str = apt_date.strftime("%a, %b %d")
+
+    time_str = appointment.start_time.strftime("%I:%M %p").lstrip('0') if appointment.start_time else ""
+
+    patient_name = appointment.user.get_full_name() or appointment.user.username
+    if appointment.midwife and appointment.midwife.user:
+        midwife_name = appointment.midwife.user.get_full_name() or appointment.midwife.user.username
+    else:
+        midwife_name = "Midwife"
+
+    return type_str, date_str, time_str, patient_name, midwife_name
+
+
+def _notify_user_and_midwife(appointment, action_type="APPOINTMENT_UPDATE"):
     """
-    Sends in-app notifications and FCM push notifications to both the patient and assigned midwife.
+    Sends clear, user-friendly in-app and FCM push notifications tailored for Patient and Midwife.
     """
+    type_str, date_str, time_str, patient_name, midwife_name = _format_appointment_info(appointment)
+
+    if action_type in ["APPOINTMENT_BOOKED", "APPOINTMENT_SCHEDULED"]:
+        title_pat = "Appointment Scheduled 🎉"
+        body_pat = f"Your {type_str} consultation with Midwife {midwife_name} is scheduled for {date_str} at {time_str}."
+        title_mw = "New Booking Request 📅"
+        body_mw = f"New {type_str} booking from {patient_name} for {date_str} at {time_str}."
+    elif action_type == "APPOINTMENT_CONFIRMED":
+        title_pat = "Appointment Confirmed ✅"
+        body_pat = f"Midwife {midwife_name} confirmed your {type_str} consultation for {date_str} at {time_str}."
+        title_mw = "Appointment Confirmed ✅"
+        body_mw = f"You confirmed the {type_str} consultation with {patient_name} for {date_str} at {time_str}."
+    elif action_type == "APPOINTMENT_CANCELLED":
+        title_pat = "Appointment Cancelled"
+        body_pat = f"Your {type_str} consultation with Midwife {midwife_name} on {date_str} at {time_str} was cancelled."
+        title_mw = "Appointment Cancelled"
+        body_mw = f"The {type_str} appointment with {patient_name} on {date_str} at {time_str} was cancelled."
+    elif action_type == "APPOINTMENT_RESCHEDULED":
+        title_pat = "Appointment Rescheduled 📅"
+        body_pat = f"Your {type_str} consultation with Midwife {midwife_name} was rescheduled to {date_str} at {time_str}."
+        title_mw = "Appointment Rescheduled 📅"
+        body_mw = f"The {type_str} consultation with {patient_name} was rescheduled to {date_str} at {time_str}."
+    elif action_type == "APPOINTMENT_COMPLETED":
+        title_pat = "Consultation Completed"
+        body_pat = f"Your {type_str} consultation with Midwife {midwife_name} is complete. Thank you!"
+        title_mw = "Consultation Completed"
+        body_mw = f"You marked the {type_str} consultation with {patient_name} as completed."
+    else:
+        title_pat = "Appointment Update"
+        body_pat = f"Your appointment with Midwife {midwife_name} on {date_str} at {time_str} has been updated."
+        title_mw = "Appointment Update"
+        body_mw = f"Appointment with {patient_name} on {date_str} at {time_str} has been updated."
+
     # Patient Notification
     Notification.objects.create(
         user=appointment.user,
-        title=title,
-        body=body,
+        title=title_pat,
+        body=body_pat,
         type="APPOINTMENT",
         action=action_type,
         reference_id=str(appointment.id),
     )
     send_general_push_notification(
         user=appointment.user,
-        title=title,
-        body=body,
+        title=title_pat,
+        body=body_pat,
         extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
     )
 
@@ -37,16 +101,16 @@ def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_
     if appointment.midwife and appointment.midwife.user:
         Notification.objects.create(
             user=appointment.midwife.user,
-            title=title,
-            body=body,
+            title=title_mw,
+            body=body_mw,
             type="APPOINTMENT",
             action=action_type,
             reference_id=str(appointment.id),
         )
         send_general_push_notification(
             user=appointment.midwife.user,
-            title=title,
-            body=body,
+            title=title_mw,
+            body=body_mw,
             extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
         )
 
@@ -313,15 +377,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         )
 
         # Send dual-side notification
-        _notify_user_and_midwife(
-            appointment,
-            title="New Appointment Scheduled",
-            body=(
-                f"Appointment {appointment.appointment_number} scheduled for {appointment.scheduled_date} "
-                f"at {appointment.start_time.strftime('%H:%M')} ({appointment.get_appointment_type_display()})."
-            ),
-            action_type="APPOINTMENT_BOOKED",
-        )
+        _notify_user_and_midwife(appointment, action_type="APPOINTMENT_BOOKED")
 
     @extend_schema(summary="Cancel a scheduled appointment", tags=["Appointments"])
     @action(detail=True, methods=['post'])
@@ -341,12 +397,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment.save()
 
         # Notify patient and midwife
-        _notify_user_and_midwife(
-            appointment,
-            title="Appointment Cancelled",
-            body=f"Appointment {appointment.appointment_number} scheduled for {appointment.scheduled_date} has been cancelled.",
-            action_type="APPOINTMENT_CANCELLED",
-        )
+        _notify_user_and_midwife(appointment, action_type="APPOINTMENT_CANCELLED")
 
         return Response({
             'status': 'CANCELLED',
@@ -384,15 +435,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         updated_apt = serializer.save()
 
         # Notify patient and midwife
-        _notify_user_and_midwife(
-            updated_apt,
-            title="Appointment Rescheduled",
-            body=(
-                f"Appointment {updated_apt.appointment_number} rescheduled to {updated_apt.scheduled_date} "
-                f"at {updated_apt.start_time}."
-            ),
-            action_type="APPOINTMENT_RESCHEDULED",
-        )
+        _notify_user_and_midwife(updated_apt, action_type="APPOINTMENT_RESCHEDULED")
 
         return Response({
             'status': updated_apt.status,
@@ -427,12 +470,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             }
         )
 
-        _notify_user_and_midwife(
-            appointment,
-            title="Appointment Confirmed",
-            body=f"Your appointment {appointment.appointment_number} with Midwife {appointment.midwife.user.username} is confirmed.",
-            action_type="APPOINTMENT_CONFIRMED",
-        )
+        _notify_user_and_midwife(appointment, action_type="APPOINTMENT_CONFIRMED")
 
         return Response({'status': 'CONFIRMED', 'message': 'Appointment confirmed successfully.'}, status=status.HTTP_200_OK)
 
@@ -452,12 +490,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment.status = Appointment.AppointmentStatus.COMPLETED
         appointment.save()
 
-        _notify_user_and_midwife(
-            appointment,
-            title="Appointment Completed",
-            body=f"Consultation appointment {appointment.appointment_number} has been completed.",
-            action_type="APPOINTMENT_COMPLETED",
-        )
+        _notify_user_and_midwife(appointment, action_type="APPOINTMENT_COMPLETED")
 
         return Response({'status': 'COMPLETED', 'message': 'Appointment marked as completed.'}, status=status.HTTP_200_OK)
 
