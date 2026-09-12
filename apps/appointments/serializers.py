@@ -6,6 +6,9 @@ from apps.midwives.serializers import MidwifeProfileSerializer
 from apps.midwives.models import MidwifeProfile
 
 
+from django.utils import timezone
+
+
 class AvailabilitySerializer(serializers.ModelSerializer):
     class Meta:
         model = Availability
@@ -14,14 +17,18 @@ class AvailabilitySerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         target_date = data.get('date') or (self.instance.date if self.instance else None)
+        if isinstance(target_date, datetime):
+            target_date = target_date.date()
+
         start_time = data.get('start_time') or (self.instance.start_time if self.instance else None)
         end_time = data.get('end_time') or (self.instance.end_time if self.instance else None)
         methods = data.get('consultation_methods')
         if methods is None and self.instance:
             methods = self.instance.consultation_methods
 
+        today = timezone.localdate()
         # Validate date is not in the past (for new instances)
-        if not self.instance and target_date and target_date < date.today():
+        if not self.instance and target_date and target_date < today:
             raise serializers.ValidationError({"date": "Availability cannot be created for a past date."})
 
         # Validate start_time < end_time

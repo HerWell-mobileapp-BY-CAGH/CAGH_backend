@@ -167,6 +167,24 @@ class AppointmentManagementTestCase(APITestCase):
         }, format="json")
         self.assertEqual(res_pass.status_code, status.HTTP_201_CREATED)
 
+    def test_create_availability_post_endpoint_regression(self):
+        """Regression test: POST /api/v1/appointments/availability/ succeeds with valid date without HTTP 500 or AssertionError."""
+        self.client.force_authenticate(user=self.midwife_user)
+        url = reverse("availability-list")
+        new_date = date.today() + timedelta(days=20)
+        data = {
+            "date": new_date.strftime("%Y-%m-%d"),
+            "start_time": "14:00:00",
+            "end_time": "16:00:00",
+            "consultation_methods": ["IN_PERSON", "VIRTUAL_VOICE"],
+            "is_active": True,
+        }
+        res = self.client.post(url, data, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data["date"], new_date.strftime("%Y-%m-%d"))
+        self.assertEqual(res.data["start_time"], "14:00:00")
+        self.assertEqual(res.data["end_time"], "16:00:00")
+
     def test_inactive_availability_produces_no_slots(self):
         """Inactive availability cannot be booked and returns 0 slots."""
         self.availability.is_active = False

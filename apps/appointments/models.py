@@ -9,7 +9,7 @@ from apps.midwives.models import MidwifeProfile
 class Availability(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     midwife = models.ForeignKey(MidwifeProfile, on_delete=models.CASCADE, related_name='availabilities')
-    date = models.DateField(default=timezone.now)
+    date = models.DateField(default=timezone.localdate)
     start_time = models.TimeField()
     end_time = models.TimeField()
     consultation_methods = models.JSONField(
