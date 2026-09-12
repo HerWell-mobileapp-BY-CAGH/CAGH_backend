@@ -1,14 +1,14 @@
 from datetime import datetime, timedelta
 from django.db import models
 from django.utils import timezone
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, exceptions
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from drf_spectacular.utils import extend_schema, OpenApiResponse
 
 from .models import Availability, TimeSlot, Appointment
 from .serializers import AvailabilitySerializer, TimeSlotSerializer, AppointmentSerializer
-from apps.midwives.models import MidwifeProfile, BlockedDate
+from apps.midwives.models import MidwifeProfile
 from apps.notifications.models import Notification
 from apps.notifications.call_notifications import send_general_push_notification
 
@@ -53,7 +53,7 @@ def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_
 
 class AvailabilityViewSet(viewsets.ModelViewSet):
     """
-    Manages midwife working hours availability schedules.
+    Manages midwife date-specific availability schedules.
     """
 
     queryset = Availability.objects.all()
@@ -61,9 +61,32 @@ class AvailabilityViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        if hasattr(self.request.user, 'midwife_profile'):
-            return Availability.objects.filter(midwife=self.request.user.midwife_profile)
-        return Availability.objects.filter(is_active=True)
+        user = self.request.user
+        queryset = Availability.objects.all()
+
+        midwife_id = self.request.query_params.get('midwife_id')
+        if midwife_id:
+            queryset = queryset.filter(midwife_id=midwife_id)
+        elif hasattr(user, 'midwife_profile') and not (user.is_staff or getattr(user, 'role', '') == 'ADMIN'):
+            queryset = queryset.filter(midwife=user.midwife_profile)
+        else:
+            queryset = queryset.filter(is_active=True)
+
+        date_param = self.request.query_params.get('date')
+        if date_param:
+            queryset = queryset.filter(date=date_param)
+
+        month_param = self.request.query_params.get('month')
+        year_param = self.request.query_params.get('year')
+        if month_param and year_param:
+            queryset = queryset.filter(date__month=month_param, date__year=year_param)
+
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        if start_date and end_date:
+            queryset = queryset.filter(date__range=[start_date, end_date])
+
+        return queryset
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -93,10 +116,13 @@ def _to_ethiopian_time(t):
     return f"{eth_h}:{m:02d} {period}"
 
 
+from django.db import transaction, models, connection
+
+
 class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Generates available 30-minute time slots for a midwife on a target date,
-    accounting for working hours, blocked dates, and existing bookings.
+    Returns available appointment periods for a midwife on a target date.
+    Each Availability period represents ONE complete bookable appointment period.
     """
 
     queryset = TimeSlot.objects.all()
@@ -144,24 +170,31 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_200_OK,
             )
 
-        # Check if date is blocked by midwife
-        if BlockedDate.objects.filter(midwife=midwife, date=target_date).exists():
-            return Response(
-                {"available": False, "reason": "Midwife is on leave / holiday on this date.", "slots": []},
-                status=status.HTTP_200_OK,
-            )
-
-        # Get day of week (0 = Monday, 6 = Sunday)
-        day_of_week = target_date.weekday()
-        availabilities = Availability.objects.filter(midwife=midwife, day_of_week=day_of_week, is_active=True)
+        # Fetch active availability periods for this midwife on this EXACT calendar date
+        availabilities = Availability.objects.filter(
+            midwife=midwife,
+            date=target_date,
+            is_active=True
+        ).order_by('start_time')
 
         if not availabilities.exists():
             return Response(
-                {"available": False, "reason": "Midwife has no working hours scheduled for this day of week.", "slots": []},
+                {
+                    "midwife_id": str(midwife.id),
+                    "midwife_name": midwife.user.username,
+                    "date": date_str,
+                    "available": False,
+                    "reason": "No availability configured for this specific date.",
+                    "available_slots_count": 0,
+                    "morning_slots": [],
+                    "afternoon_slots": [],
+                    "evening_slots": [],
+                    "slots": [],
+                },
                 status=status.HTTP_200_OK,
             )
 
-        # Get existing appointments for midwife on this date
+        # Get existing PENDING and CONFIRMED appointments for midwife on this date
         booked_appointments = Appointment.objects.filter(
             midwife=midwife,
             scheduled_date=target_date,
@@ -170,35 +203,35 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
 
         generated_slots = []
         for avail in availabilities:
-            curr_start = datetime.combine(target_date, avail.start_time)
-            curr_end = datetime.combine(target_date, avail.end_time)
+            methods = avail.consultation_methods or ["IN_PERSON", "VIRTUAL_VOICE"]
+            slot_start_time = avail.start_time
+            slot_end_time = avail.end_time
 
-            while curr_start + timedelta(minutes=30) <= curr_end:
-                slot_start_time = curr_start.time()
-                slot_end_time = (curr_start + timedelta(minutes=30)).time()
+            duration_mins = int((datetime.combine(target_date, slot_end_time) - datetime.combine(target_date, slot_start_time)).total_seconds() / 60)
 
-                # Check if slot overlaps with any booked appointment
-                is_booked = booked_appointments.filter(
-                    start_time__lt=slot_end_time,
-                    end_time__gt=slot_start_time,
-                ).exists()
+            # Check if this entire availability period overlaps with any booked appointment
+            is_booked = booked_appointments.filter(
+                start_time__lt=slot_end_time,
+                end_time__gt=slot_start_time,
+            ).exists()
 
-                generated_slots.append({
-                    "date": date_str,
-                    "start_time": slot_start_time.strftime("%H:%M"),
-                    "end_time": slot_end_time.strftime("%H:%M"),
-                    "start_time_12h": slot_start_time.strftime("%I:%M %p"),
-                    "end_time_12h": slot_end_time.strftime("%I:%M %p"),
-                    "start_time_ethiopian": _to_ethiopian_time(slot_start_time),
-                    "end_time_ethiopian": _to_ethiopian_time(slot_end_time),
-                    "is_available": not is_booked,
-                })
+            generated_slots.append({
+                "availability_id": str(avail.id),
+                "date": date_str,
+                "start_time": slot_start_time.strftime("%H:%M"),
+                "end_time": slot_end_time.strftime("%H:%M"),
+                "start_time_12h": slot_start_time.strftime("%I:%M %p"),
+                "end_time_12h": slot_end_time.strftime("%I:%M %p"),
+                "start_time_ethiopian": _to_ethiopian_time(slot_start_time),
+                "end_time_ethiopian": _to_ethiopian_time(slot_end_time),
+                "duration_minutes": duration_mins,
+                "consultation_methods": methods,
+                "is_available": not is_booked,
+            })
 
-                curr_start += timedelta(minutes=30)
-
-        morning_slots = [s for s in generated_slots if 9 <= int(s["start_time"].split(":")[0]) < 12]
+        morning_slots = [s for s in generated_slots if 5 <= int(s["start_time"].split(":")[0]) < 12]
         afternoon_slots = [s for s in generated_slots if 12 <= int(s["start_time"].split(":")[0]) < 17]
-        evening_slots = [s for s in generated_slots if 17 <= int(s["start_time"].split(":")[0]) < 21]
+        evening_slots = [s for s in generated_slots if 17 <= int(s["start_time"].split(":")[0]) < 23]
 
         return Response({
             "midwife_id": str(midwife.id),
@@ -233,6 +266,39 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return queryset.filter(models.Q(user=user) | models.Q(midwife=user.midwife_profile))
 
         return queryset.filter(user=user)
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        midwife = serializer.validated_data.get('midwife')
+        scheduled_date = serializer.validated_data.get('scheduled_date')
+        start_time = serializer.validated_data.get('start_time')
+        end_time = serializer.validated_data.get('end_time')
+
+        # Lock active appointments for this midwife and date to prevent concurrent double-booking
+        if midwife and scheduled_date and start_time and end_time:
+            query = Appointment.objects.filter(
+                midwife=midwife,
+                scheduled_date=scheduled_date,
+                status__in=[Appointment.AppointmentStatus.PENDING, Appointment.AppointmentStatus.CONFIRMED],
+                start_time__lt=end_time,
+                end_time__gt=start_time,
+            )
+            if connection.vendor != 'sqlite':
+                query = query.select_for_update()
+
+            _locked_existing = list(query)
+            if len(_locked_existing) > 0:
+                return Response(
+                    {"detail": "This time slot is already booked for another appointment. Please choose a different time."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         midwife = serializer.validated_data.get('midwife')

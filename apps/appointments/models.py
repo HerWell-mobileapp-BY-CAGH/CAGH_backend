@@ -2,28 +2,30 @@ import uuid
 from django.db import models
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 from apps.midwives.models import MidwifeProfile
 
 
 class Availability(models.Model):
-    class DayOfWeek(models.IntegerChoices):
-        MONDAY = 0, _('Monday')
-        TUESDAY = 1, _('Tuesday')
-        WEDNESDAY = 2, _('Wednesday')
-        THURSDAY = 3, _('Thursday')
-        FRIDAY = 4, _('Friday')
-        SATURDAY = 5, _('Saturday')
-        SUNDAY = 6, _('Sunday')
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     midwife = models.ForeignKey(MidwifeProfile, on_delete=models.CASCADE, related_name='availabilities')
-    day_of_week = models.IntegerField(choices=DayOfWeek.choices)
+    date = models.DateField(default=timezone.now)
     start_time = models.TimeField()
     end_time = models.TimeField()
+    consultation_methods = models.JSONField(
+        default=list,
+        help_text="Supported consultation methods for this period, e.g. ['IN_PERSON', 'VIRTUAL_VOICE']"
+    )
     is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['date', 'start_time']
+        verbose_name_plural = "Availabilities"
 
     def __str__(self):
-        return f"{self.midwife.user.username} - {self.get_day_of_week_display()} ({self.start_time}-{self.end_time})"
+        return f"{self.midwife.user.username} on {self.date} ({self.start_time}-{self.end_time})"
 
 
 class TimeSlot(models.Model):
