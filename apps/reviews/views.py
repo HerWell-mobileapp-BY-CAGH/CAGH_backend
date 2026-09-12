@@ -1,6 +1,7 @@
 from django.db import models
 from rest_framework import viewsets, permissions, status, generics
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from django.shortcuts import get_object_or_404
 
@@ -95,4 +96,40 @@ class AdminMidwifeReviewListView(generics.ListAPIView):
         return Review.objects.filter(midwife=midwife).select_related(
             'user', 'midwife', 'midwife__user'
         ).order_by('-created_at')
+
+
+class AdminReviewSummaryView(APIView):
+    """Administrator-only aggregate used by the feedback dashboard cards."""
+
+    permission_classes = [IsAdmin]
+
+    @extend_schema(
+        summary="Get administrator review summary",
+        description="Returns totals, average rating, and a complete 1–5 rating distribution.",
+        tags=["Reviews & Ratings"],
+    )
+    def get(self, request):
+        aggregates = Review.objects.aggregate(
+            average_rating=models.Avg('rating'),
+            total_reviews=models.Count('id'),
+        )
+        total_reviews = aggregates['total_reviews']
+        counts = {
+            rating: Review.objects.filter(rating=rating).count()
+            for rating in range(1, 6)
+        }
+        return Response({
+            'total_reviews': total_reviews,
+            'average_rating': round(aggregates['average_rating'] or 0, 2),
+            'max_rating': 5,
+            'distribution': [
+                {
+                    'rating': rating,
+                    'count': counts[rating],
+                    'percentage': round((counts[rating] / total_reviews) * 100, 2)
+                    if total_reviews else 0,
+                }
+                for rating in range(5, 0, -1)
+            ],
+        })
 
