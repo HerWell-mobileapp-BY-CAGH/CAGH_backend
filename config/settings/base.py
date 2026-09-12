@@ -288,6 +288,9 @@ if _env_cors_regexes:
     )
 
 CORS_ALLOW_ALL_ORIGINS = False
+# The admin dashboard uses a Django language cookie in addition to its JWT.
+# Credentials must therefore be accepted for permitted dashboard origins.
+CORS_ALLOW_CREDENTIALS = True
 
 
 

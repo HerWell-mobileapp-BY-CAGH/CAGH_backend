@@ -24,6 +24,7 @@ from .views import (
     UserRegistrationView,
     LogoutView,
     PasswordChangeView,
+    AdminPasswordChangeView,
     PasswordResetRequestView,
     PasswordResetConfirmView,
     SendOTPView,
@@ -53,6 +54,7 @@ urlpatterns = [
 
     # ---------- Password ----------
     path("password/change/", PasswordChangeView.as_view(), name="auth-password-change"),
+    path("admin/password/change/", AdminPasswordChangeView.as_view(), name="auth-admin-password-change"),
     path("password/reset/", PasswordResetRequestView.as_view(), name="auth-password-reset"),
     path("password/reset/confirm/", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
     path("password/reset/otp/", PasswordResetOTPRequestView.as_view(), name="auth-password-reset-otp"),

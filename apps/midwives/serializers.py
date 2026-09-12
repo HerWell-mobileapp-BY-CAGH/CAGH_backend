@@ -150,6 +150,7 @@ class MidwifeApplicationDetailSerializer(MidwifeProfileSerializer):
     cv_file_url = serializers.SerializerMethodField()
     verified_by_detail = AdminReviewerSerializer(source="verified_by", read_only=True)
     certificates = CertificateSerializer(many=True, read_only=True)
+    review_actions = serializers.SerializerMethodField(read_only=True)
 
     class Meta(MidwifeProfileSerializer.Meta):
         fields = (
@@ -159,7 +160,7 @@ class MidwifeApplicationDetailSerializer(MidwifeProfileSerializer):
             "verified_by", "verified_by_detail", "rejection_reason", "suspension_reason", "specialty",
             "consultation_fee", "is_accepting_bookings", "rating_average",
             "rating_count", "created_at", "updated_at", "qualifications",
-            "certificates", "expertises", "is_favorite",
+            "certificates", "expertises", "is_favorite", "review_actions",
         )
         read_only_fields = MidwifeProfileSerializer.Meta.read_only_fields
 
@@ -170,6 +171,32 @@ class MidwifeApplicationDetailSerializer(MidwifeProfileSerializer):
         if request:
             return request.build_absolute_uri(obj.cv_file.url)
         return obj.cv_file.url
+
+    def get_review_actions(self, obj):
+        """UI-ready review controls for the application's current state."""
+        status = obj.verification_status
+        pending = {
+            MidwifeProfile.VerificationStatus.PENDING,
+            MidwifeProfile.VerificationStatus.UNDER_REVIEW,
+        }
+
+        if status in pending:
+            actions = ("APPROVE", "REJECT")
+        elif status == MidwifeProfile.VerificationStatus.APPROVED:
+            actions = ("SUSPEND",)
+        else:
+            # A rejected or suspended application can be reinstated after a
+            # corrected submission or administrative review.
+            actions = ("APPROVE",)
+
+        return [
+            {
+                "action": action,
+                "requires_reason": action in ("REJECT", "SUSPEND"),
+                "review_url": f"/api/v1/midwives/applications/{obj.pk}/review/",
+            }
+            for action in actions
+        ]
 
 
 class AdminMidwifeApplicationUpdateSerializer(serializers.ModelSerializer):

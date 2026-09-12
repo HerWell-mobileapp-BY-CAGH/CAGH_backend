@@ -149,6 +149,23 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return value or None
 
     def validate(self, attrs):
+        # Some clients use expected_role/user_type rather than role.  Normalize
+        # those aliases here even when the model field default supplied PATIENT.
+        initial = getattr(self, "initial_data", {}) or {}
+        raw_role = (
+            initial.get("role") or initial.get("expected_role") or initial.get("user_type")
+            or initial.get("account_type") or initial.get("type")
+        )
+        if initial.get("is_midwife") is True or str(initial.get("is_midwife", "")).lower() == "true":
+            raw_role = User.Role.MIDWIFE
+        if raw_role:
+            normalized_role = User.Role.normalize(raw_role)
+            if normalized_role == User.Role.ADMIN:
+                raise serializers.ValidationError({"role": "Admin accounts cannot be created through public registration."})
+            if normalized_role not in (User.Role.PATIENT, User.Role.MIDWIFE):
+                raise serializers.ValidationError({"role": "Role must be PATIENT or MIDWIFE."})
+            attrs["role"] = normalized_role
+
         email = attrs.get("email")
         phone_number = attrs.get("phone_number")
         password = attrs.get("password")

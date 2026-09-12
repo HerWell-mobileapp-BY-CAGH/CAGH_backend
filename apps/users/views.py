@@ -56,6 +56,7 @@ from .serializers import (
     PasswordResetOTPConfirmSerializer,
 )
 from .models import Profile, EmergencyContact, SOSLog, UserPreference, OTPVerification
+from .permissions import IsAdmin
 from .user_serializers import (
     AdminUserCreateSerializer,
     UserSerializer,
@@ -133,26 +134,12 @@ class UserRegistrationView(generics.CreateAPIView):
 
         tokens = _token_pair_for(user)
 
-        return Response(
-            {
-                "message": "Account created successfully.",
-                "user": {
-                    "id": str(user.id),
-                    "first_name": user.first_name or (user.profile.first_name if hasattr(user, 'profile') else ""),
-                    "last_name": user.last_name or (user.profile.last_name if hasattr(user, 'profile') else ""),
-                    "username": user.username,
-                    "email": user.email,
-                    "role": user.role,
-                    "phone_number": user.phone_number,
-                },
-                **tokens,
-            },
-            status=status.HTTP_201_CREATED,
-        )
         payload = {
             "message": "Account created successfully.",
             "user": {
                 "id": str(user.id),
+                "first_name": user.first_name or user.profile.first_name,
+                "last_name": user.last_name or user.profile.last_name,
                 "username": user.username,
                 "email": user.email,
                 "role": user.role,
@@ -503,6 +490,26 @@ class PasswordChangeView(APIView):
             {"message": "Password changed successfully.", **tokens},
             status=status.HTTP_200_OK,
         )
+
+
+class AdminPasswordChangeView(PasswordChangeView):
+    """Change the password of the authenticated administrator."""
+
+    permission_classes = [IsAdmin]
+
+    @extend_schema(
+        summary="Change authenticated administrator password",
+        request=PasswordChangeSerializer,
+        responses={
+            200: OpenApiResponse(description="Password changed. New tokens issued."),
+            400: OpenApiResponse(description="Validation error"),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="Administrator access is required."),
+        },
+        tags=["Admin Authentication"],
+    )
+    def post(self, request):
+        return super().post(request)
 
 
 # ---------------------------------------------------------------------------

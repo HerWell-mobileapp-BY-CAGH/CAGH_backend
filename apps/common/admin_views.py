@@ -9,7 +9,9 @@ from rest_framework import filters, generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
+from django.conf import settings
 from django.db.models import Count
+from django.utils.translation import activate
 from django_filters.rest_framework import DjangoFilterBackend
 
 from apps.users.permissions import IsAdmin
@@ -17,6 +19,8 @@ from apps.users.models import EmergencyContact, Profile
 from apps.notifications.models import Notification
 from apps.midwives.models import MidwifeProfile
 from apps.midwives.models import Hospital
+from apps.appointments.models import Appointment
+from apps.consultations.models import Consultation
 from .admin_services import (
     build_admin_dashboard_payload,
     build_midwife_stats_payload,
@@ -30,11 +34,21 @@ from .admin_serializers import (
     AdminHospitalSerializer,
     AdminMidwifeStatsResponseSerializer,
     AdminNotificationSerializer,
+    AdminProfileSerializer,
+    AdminAppointmentSerializer,
+    AdminConsultationSerializer,
 )
 
 
 class AdminListCreateView(generics.ListCreateAPIView):
     """Shared safeguards and query support for admin-managed collections."""
+
+    permission_classes = [IsAdmin]
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
+
+
+class AdminReadOnlyListView(generics.ListAPIView):
+    """Shared filtering and access control for admin reporting feeds."""
 
     permission_classes = [IsAdmin]
     filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
@@ -133,7 +147,13 @@ class AdminLanguagePreferenceView(generics.RetrieveUpdateAPIView):
         tags=["Admin"],
     )
     def get(self, request, *args, **kwargs):
-        return self.retrieve(request, *args, **kwargs)
+        response = self.retrieve(request, *args, **kwargs)
+        language = response.data["preferred_language"]
+        activate(language)
+        # JWT requests do not necessarily have a session, so persist the
+        # preference in both the database and Django's standard language cookie.
+        response.set_cookie(getattr(settings, "LANGUAGE_COOKIE_NAME", "django_language"), language)
+        return response
 
     @extend_schema(
         summary="Change admin language preference",
@@ -142,7 +162,72 @@ class AdminLanguagePreferenceView(generics.RetrieveUpdateAPIView):
     )
     def patch(self, request, *args, **kwargs):
         # Profile.Language choices validate the same language codes as the app form.
+        response = self.partial_update(request, *args, **kwargs)
+        if response.status_code < 400:
+            language = response.data["preferred_language"]
+            activate(language)
+            if hasattr(request, "session"):
+                request.session["django_language"] = language
+            response.set_cookie(
+                getattr(settings, "LANGUAGE_COOKIE_NAME", "django_language"),
+                language,
+            )
+        return response
+
+
+class AdminProfileView(generics.RetrieveUpdateAPIView):
+    """Fetch or edit the signed-in administrator's account/profile details."""
+
+    permission_classes = [IsAdmin]
+    serializer_class = AdminProfileSerializer
+
+    def get_object(self):
+        # Keeps this endpoint usable for older staff records created before
+        # profile creation was automatic.
+        Profile.objects.get_or_create(user=self.request.user)
+        return self.request.user
+
+    @extend_schema(summary="Get admin profile", tags=["Admin"])
+    def get(self, request, *args, **kwargs):
+        return self.retrieve(request, *args, **kwargs)
+
+    @extend_schema(summary="Edit admin profile", tags=["Admin"])
+    def patch(self, request, *args, **kwargs):
         return self.partial_update(request, *args, **kwargs)
+
+    @extend_schema(summary="Replace admin profile", tags=["Admin"])
+    def put(self, request, *args, **kwargs):
+        return self.update(request, *args, **kwargs)
+
+
+class AdminAppointmentListView(AdminReadOnlyListView):
+    """Read-only, complete appointment feed for the administrator portal."""
+
+    queryset = Appointment.objects.select_related("user", "user__profile", "midwife", "midwife__user", "midwife__user__profile", "midwife__hospital")
+    serializer_class = AdminAppointmentSerializer
+    filterset_fields = ("status", "appointment_type", "midwife", "user", "scheduled_date")
+    search_fields = ("appointment_number", "user__username", "user__email", "midwife__user__username", "midwife__user__email")
+    ordering_fields = ("scheduled_date", "start_time", "created_at", "updated_at", "status")
+    ordering = ("-scheduled_date", "-start_time")
+
+    @extend_schema(summary="List all appointments with patient and midwife data", tags=["Admin"])
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+
+class AdminConsultationListView(AdminReadOnlyListView):
+    """Read-only, complete consultation feed for the administrator portal."""
+
+    queryset = Consultation.objects.select_related("appointment", "appointment__user", "appointment__midwife", "user", "user__profile", "midwife", "midwife__user", "midwife__user__profile", "midwife__hospital").prefetch_related("notes", "notes__midwife", "voice_sessions")
+    serializer_class = AdminConsultationSerializer
+    filterset_fields = ("status", "consultation_type", "midwife", "user", "appointment")
+    search_fields = ("user__username", "user__email", "midwife__user__username", "midwife__user__email", "diagnosis", "summary")
+    ordering_fields = ("created_at", "updated_at", "started_at", "ended_at", "status")
+    ordering = ("-created_at",)
+
+    @extend_schema(summary="List all consultations with their full related data", tags=["Admin"])
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
 
 
 class AdminDashboardView(APIView):

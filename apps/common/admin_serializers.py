@@ -5,11 +5,17 @@ These serializers document the response shape for Swagger/ReDoc; the views
 build plain dict payloads via admin_services helpers.
 """
 
+from django.db import transaction
 from rest_framework import serializers
 
 from apps.notifications.models import Notification
 from apps.users.models import EmergencyContact, Profile, User
+from apps.users.user_serializers import ProfileSerializer
 from apps.midwives.models import Hospital
+from apps.appointments.models import Appointment
+from apps.appointments.serializers import AppointmentSerializer
+from apps.consultations.models import Consultation
+from apps.consultations.serializers import ConsultationSerializer
 
 
 class AdminDashboardTotalsSerializer(serializers.Serializer):
@@ -134,3 +140,63 @@ class AdminLanguagePreferenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Profile
         fields = ("preferred_language",)
+
+
+class AdminProfileSerializer(serializers.ModelSerializer):
+    """The authenticated administrator's account and editable profile data."""
+
+    profile = ProfileSerializer(required=False)
+
+    class Meta:
+        model = User
+        fields = (
+            "id", "username", "email", "phone_number", "first_name", "last_name",
+            "role", "profile",
+        )
+        read_only_fields = ("id", "role")
+
+    def validate_email(self, value):
+        value = value.strip().lower() if value else None
+        if value and User.objects.filter(email__iexact=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return value
+
+    def validate_phone_number(self, value):
+        value = value.strip() if value else None
+        if value and User.objects.filter(phone_number=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("A user with this phone number already exists.")
+        return value
+
+    def validate_username(self, value):
+        value = value.strip() if value else None
+        if value and User.objects.filter(username__iexact=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("This username is already taken.")
+        return value
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        profile_data = validated_data.pop("profile", None)
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.save()
+
+        if profile_data is not None:
+            profile, _ = Profile.objects.get_or_create(user=instance)
+            for field, value in profile_data.items():
+                setattr(profile, field, value)
+            profile.save()
+        return instance
+
+
+class AdminAppointmentSerializer(AppointmentSerializer):
+    """Complete appointment record for the administrator portal."""
+
+    class Meta(AppointmentSerializer.Meta):
+        model = Appointment
+
+
+class AdminConsultationSerializer(ConsultationSerializer):
+    """Complete consultation record for the administrator portal."""
+
+    class Meta(ConsultationSerializer.Meta):
+        model = Consultation

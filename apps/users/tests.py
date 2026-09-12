@@ -10,6 +10,51 @@ User = get_user_model()
 
 class AuthenticationTestCase(APITestCase):
 
+    def test_admin_can_change_password_from_admin_route(self):
+        admin = User.objects.create_user(
+            username="password_admin",
+            email="password-admin@example.com",
+            password="OldAdminPassword123!",
+            role=User.Role.ADMIN,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            reverse("auth-admin-password-change"),
+            {
+                "old_password": "OldAdminPassword123!",
+                "new_password": "NewAdminPassword123!",
+                "new_password_confirm": "NewAdminPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        admin.refresh_from_db()
+        self.assertTrue(admin.check_password("NewAdminPassword123!"))
+
+    def test_non_admin_cannot_use_admin_password_route(self):
+        patient = User.objects.create_user(
+            username="patient_password_route",
+            email="patient-password-route@example.com",
+            password="PatientPassword123!",
+        )
+        self.client.force_authenticate(user=patient)
+
+        response = self.client.post(
+            reverse("auth-admin-password-change"),
+            {
+                "old_password": "PatientPassword123!",
+                "new_password": "AnotherPassword123!",
+                "new_password_confirm": "AnotherPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_email_registration_without_username(self):
         url = reverse("auth-register")
         data = {

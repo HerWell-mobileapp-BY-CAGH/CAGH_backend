@@ -326,6 +326,7 @@ class AdminDirectoryManagementAPITestCase(APITestCase):
         )
         self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
         self.assertEqual(patch_response.data["preferred_language"], "am")
+        self.assertEqual(patch_response.cookies["django_language"].value, "am")
 
         self.admin.profile.refresh_from_db()
         self.assertEqual(self.admin.profile.preferred_language, "am")
