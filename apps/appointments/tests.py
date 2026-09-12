@@ -185,6 +185,39 @@ class AppointmentManagementTestCase(APITestCase):
         self.assertEqual(res.data["start_time"], "14:00:00")
         self.assertEqual(res.data["end_time"], "16:00:00")
 
+    def test_booking_with_availability_id_and_field_aliases(self):
+        """Regression test: POST /api/v1/appointments/ succeeds when passing availability_id or field aliases (midwife_id, date)."""
+        self.client.force_authenticate(user=self.patient)
+        url = reverse("appointment-list")
+
+        # Booking using availability_id payload
+        res = self.client.post(url, {
+            "availability_id": str(self.availability.id),
+            "appointment_type": "IN_PERSON",
+            "reason": "Test booking via availability_id"
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data["scheduled_date"], self.target_date.strftime("%Y-%m-%d"))
+        self.assertEqual(res.data["start_time"], "09:00:00")
+        self.assertEqual(res.data["end_time"], "10:00:00")
+
+    def test_booking_validation_clear_error_messages(self):
+        """Verifies HTTP 400 returns clear, field-specific validation error details."""
+        self.client.force_authenticate(user=self.patient)
+        url = reverse("appointment-list")
+
+        # Booking on a date/time without active availability
+        res = self.client.post(url, {
+            "midwife": str(self.midwife_profile.id),
+            "appointment_type": "IN_PERSON",
+            "scheduled_date": (date.today() + timedelta(days=30)).strftime("%Y-%m-%d"),
+            "start_time": "09:00:00",
+            "end_time": "10:00:00",
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("start_time", res.data)
+        self.assertIn("No active availability period found", res.data["start_time"][0])
+
     def test_inactive_availability_produces_no_slots(self):
         """Inactive availability cannot be booked and returns 0 slots."""
         self.availability.is_active = False
@@ -332,3 +365,58 @@ class AppointmentManagementTestCase(APITestCase):
         self.assertIn("Sent", result_msg)
         reminders = Notification.objects.filter(type="APPOINTMENT_REMINDER_24H")
         self.assertTrue(reminders.exists())
+
+    def test_availability_creation_with_string_consultation_method_regression(self):
+        """Regression test for screenshot issue: POSTing availability with string display names ('Voice call', 'In person') succeeds without 400."""
+        self.client.force_authenticate(user=self.midwife_user)
+        url = reverse("availability-list")
+        test_d = date.today() + timedelta(days=25)
+
+        # POST with single display string "Voice call"
+        res = self.client.post(url, {
+            "date": test_d.strftime("%Y-%m-%d"),
+            "start_time": "11:00:00",
+            "end_time": "12:00:00",
+            "consultation_methods": "Voice call",
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data["consultation_methods"], ["VIRTUAL_VOICE"])
+
+        # POST with list of display strings ["In person", "Voice call"]
+        test_d2 = date.today() + timedelta(days=26)
+        res2 = self.client.post(url, {
+            "date": test_d2.strftime("%Y-%m-%d"),
+            "start_time": "13:00:00",
+            "end_time": "14:00:00",
+            "consultation_methods": ["In person", "Voice call"],
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(res2.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res2.data["consultation_methods"], ["IN_PERSON", "VIRTUAL_VOICE"])
+
+    def test_booking_with_empty_availability_methods_fallback_regression(self):
+        """Regression test for POST /api/v1/appointments/ HTTP 400 issue: Availability with empty consultation_methods uses fallback and permits booking."""
+        empty_avail_date = date.today() + timedelta(days=28)
+        # Create availability period with empty consultation_methods []
+        avail = Availability.objects.create(
+            midwife=self.midwife_profile,
+            date=empty_avail_date,
+            start_time="10:00:00",
+            end_time="11:00:00",
+            consultation_methods=[],
+            is_active=True,
+        )
+
+        self.client.force_authenticate(user=self.patient)
+        url = reverse("appointment-list")
+
+        # Booking VIRTUAL_VOICE should succeed via fallback instead of returning HTTP 400
+        res = self.client.post(url, {
+            "availability_id": str(avail.id),
+            "type": "Voice call",
+            "reason": "Routine Checkup"
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res.data["appointment_type"], "VIRTUAL_VOICE")
+        self.assertEqual(res.data["scheduled_date"], empty_avail_date.strftime("%Y-%m-%d"))
