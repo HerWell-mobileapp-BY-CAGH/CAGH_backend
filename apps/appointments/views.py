@@ -10,11 +10,12 @@ from .models import Availability, TimeSlot, Appointment
 from .serializers import AvailabilitySerializer, TimeSlotSerializer, AppointmentSerializer
 from apps.midwives.models import MidwifeProfile, BlockedDate
 from apps.notifications.models import Notification
+from apps.notifications.call_notifications import send_general_push_notification
 
 
 def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_UPDATE"):
     """
-    Sends in-app notifications to both the patient and assigned midwife.
+    Sends in-app notifications and FCM push notifications to both the patient and assigned midwife.
     """
     # Patient Notification
     Notification.objects.create(
@@ -24,6 +25,12 @@ def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_
         type="APPOINTMENT",
         action=action_type,
         reference_id=str(appointment.id),
+    )
+    send_general_push_notification(
+        user=appointment.user,
+        title=title,
+        body=body,
+        extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
     )
 
     # Midwife Notification
@@ -35,6 +42,12 @@ def _notify_user_and_midwife(appointment, title, body, action_type="APPOINTMENT_
             type="APPOINTMENT",
             action=action_type,
             reference_id=str(appointment.id),
+        )
+        send_general_push_notification(
+            user=appointment.midwife.user,
+            title=title,
+            body=body,
+            extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
         )
 
 

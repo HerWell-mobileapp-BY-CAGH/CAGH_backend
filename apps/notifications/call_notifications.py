@@ -394,3 +394,79 @@ def send_incoming_call_notification(caller, recipient, consultation, call_type="
 
     return notification
 
+
+def send_general_push_notification(user, title, body, extra_data=None):
+    """
+    Sends a standard FCM Push Notification (title + body + data payload)
+    to all active registered device tokens of a user.
+    Respects user NotificationPreferences (enable_push_notifications).
+    """
+    if not user:
+        return None
+
+    # Respect user push notification preference if configured
+    pref = getattr(user, 'notification_preferences', None)
+    if pref and not pref.enable_push_notifications:
+        logger.info(f"[FCM] Push skipped for user {user.id}: disabled in preferences")
+        return None
+
+    fb_app = init_firebase_admin()
+    if not fb_app:
+        logger.warning(f"[FCM] Push skipped for user {user.id}: Firebase not initialized")
+        return None
+
+    raw_tokens = list(
+        DeviceToken.objects.filter(user=user, is_active=True).values_list('token', flat=True)
+    )
+    tokens = list(dict.fromkeys([t.strip() for t in raw_tokens if t and t.strip()]))
+
+    if not tokens:
+        logger.info(f"[FCM] No active device tokens for user {user.id}")
+        return None
+
+    data_payload = {str(k): str(v) for k, v in (extra_data or {}).items()}
+
+    try:
+        from firebase_admin import messaging
+        message = messaging.MulticastMessage(
+            tokens=tokens,
+            notification=messaging.Notification(
+                title=title,
+                body=body,
+            ),
+            data=data_payload,
+            android=messaging.AndroidConfig(
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    sound='default',
+                    channel_id='cagh_notifications',
+                ),
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        sound='default',
+                    ),
+                ),
+            ),
+        )
+
+        if hasattr(messaging, 'send_each_for_multicast'):
+            response = messaging.send_each_for_multicast(message, app=fb_app)
+        else:
+            response = messaging.send_multicast(message, app=fb_app)
+
+        if response.failure_count > 0:
+            for idx, resp in enumerate(response.responses):
+                if not resp.success and resp.exception:
+                    err_code = str(resp.exception)
+                    if 'Unregistered' in err_code or 'InvalidArgument' in err_code:
+                        stale_token = tokens[idx]
+                        DeviceToken.objects.filter(token=stale_token).update(is_active=False)
+
+        return response
+    except Exception as exc:
+        logger.error(f"[FCM] General push notification error for user {user.id}: {exc}")
+        return None
+
+

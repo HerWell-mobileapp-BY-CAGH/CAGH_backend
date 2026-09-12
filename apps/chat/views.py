@@ -10,13 +10,13 @@ from drf_spectacular.utils import extend_schema
 from .models import ChatRoom, Message, Attachment
 from .serializers import ChatRoomSerializer, MessageSerializer, AttachmentSerializer
 from apps.notifications.models import Notification
+from apps.notifications.call_notifications import send_general_push_notification
 
 
 class ChatRoomViewSet(viewsets.ModelViewSet):
     """
-    Module 6 — Chat System
     Handles chat requests, midwife accept/reject workflow, real-time messaging,
-    attachments (Image, PDF, Voice Note), and read receipts.
+    attachments, and read receipts.
     """
 
     queryset = ChatRoom.objects.all().select_related('user', 'midwife', 'midwife__user')
@@ -53,7 +53,7 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         initial_text = serializer.validated_data.pop('initial_message', None)
         room = serializer.save(user=self.request.user, status=ChatRoom.RoomStatus.REQUESTED)
 
-        # Create initial text message if provided by user (TikTok request style)
+        # Create initial text message if provided by user
         if initial_text:
             Message.objects.create(
                 chat_room=room,
@@ -65,13 +65,21 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
 
         # Notify midwife of new chat request
         if room.midwife and room.midwife.user:
+            title_mw = "New Chat Request"
+            body_mw = f"User {self.request.user.username} sent you a direct message chat request."
             Notification.objects.create(
                 user=room.midwife.user,
-                title="New Chat Request",
-                body=f"User {self.request.user.username} sent you a direct message chat request.",
+                title=title_mw,
+                body=body_mw,
                 type="CHAT",
                 action="CHAT_REQUEST",
                 reference_id=str(room.id),
+            )
+            send_general_push_notification(
+                user=room.midwife.user,
+                title=title_mw,
+                body=body_mw,
+                extra_data={"type": "CHAT", "action": "CHAT_REQUEST", "room_id": str(room.id)},
             )
 
     @extend_schema(summary="Midwife action: Accept chat request", tags=["Chat"])
@@ -85,13 +93,21 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         room.save()
 
         # Notify user
+        title_u = "Chat Request Accepted"
+        body_u = f"Midwife {request.user.username} accepted your chat request. You can now chat freely."
         Notification.objects.create(
             user=room.user,
-            title="Chat Request Accepted",
-            body=f"Midwife {request.user.username} accepted your chat request. You can now chat freely.",
+            title=title_u,
+            body=body_u,
             type="CHAT",
             action="CHAT_ACCEPTED",
             reference_id=str(room.id),
+        )
+        send_general_push_notification(
+            user=room.user,
+            title=title_u,
+            body=body_u,
+            extra_data={"type": "CHAT", "action": "CHAT_ACCEPTED", "room_id": str(room.id)},
         )
 
         return Response({'status': 'ACCEPTED', 'message': 'Chat request accepted successfully.'}, status=status.HTTP_200_OK)
@@ -107,13 +123,21 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
         room.save()
 
         # Notify user
+        title_u = "Chat Request Declined"
+        body_u = f"Midwife {request.user.username} is unavailable for direct chat right now. You may book an appointment for consultations."
         Notification.objects.create(
             user=room.user,
-            title="Chat Request Declined",
-            body=f"Midwife {request.user.username} is unavailable for direct chat right now. You may book an appointment for consultations.",
+            title=title_u,
+            body=body_u,
             type="CHAT",
             action="CHAT_REJECTED",
             reference_id=str(room.id),
+        )
+        send_general_push_notification(
+            user=room.user,
+            title=title_u,
+            body=body_u,
+            extra_data={"type": "CHAT", "action": "CHAT_REJECTED", "room_id": str(room.id)},
         )
 
         return Response({'status': 'REJECTED', 'message': 'Chat request rejected.'}, status=status.HTTP_200_OK)
