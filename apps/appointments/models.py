@@ -1,6 +1,7 @@
 import uuid
 from django.db import models
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from apps.midwives.models import MidwifeProfile
@@ -23,6 +24,17 @@ class Availability(models.Model):
     class Meta:
         ordering = ['date', 'start_time']
         verbose_name_plural = "Availabilities"
+
+    def clean(self):
+        super().clean()
+        today = timezone.localdate()
+        now_time = timezone.localtime().time()
+        if self.date and self.date < today:
+            raise ValidationError({'date': _('Availability date cannot be in the past.')})
+        if self.date == today and self.start_time and self.start_time <= now_time:
+            raise ValidationError({'start_time': _('Start time must be strictly later than current time for today\'s availability.')})
+        if self.start_time and self.end_time and self.start_time >= self.end_time:
+            raise ValidationError({'start_time': _('Start time must be earlier than end time.')})
 
     def __str__(self):
         return f"{self.midwife.user.username} on {self.date} ({self.start_time}-{self.end_time})"

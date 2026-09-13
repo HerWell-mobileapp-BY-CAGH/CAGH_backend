@@ -1,6 +1,8 @@
 import threading
-from datetime import date, timedelta
+from datetime import date, time, datetime, timedelta
+from unittest.mock import patch
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase, APIClient
 from django.contrib.auth import get_user_model
@@ -420,3 +422,162 @@ class AppointmentManagementTestCase(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data["appointment_type"], "VIRTUAL_VOICE")
         self.assertEqual(res.data["scheduled_date"], empty_avail_date.strftime("%Y-%m-%d"))
+
+
+class AvailabilitySchedulingValidationTestCase(APITestCase):
+
+    def setUp(self):
+        self.midwife_user = User.objects.create_user(
+            username="midwife_sched",
+            email="midwife_sched@example.com",
+            password="MidwifePassword123!",
+            role="MIDWIFE",
+        )
+        self.hospital = Hospital.objects.create(name="Central Hospital", address="Addis Ababa")
+        self.midwife_profile = MidwifeProfile.objects.create(
+            user=self.midwife_user,
+            hospital=self.hospital,
+            license_number="MW-SCHED-100",
+            verification_status="APPROVED",
+            offered_consultation_types=["IN_PERSON", "VIRTUAL_VOICE"],
+        )
+        self.client.force_authenticate(user=self.midwife_user)
+        self.url = reverse("availability-list")
+
+        self.fixed_today = date(2026, 9, 15)
+        self.fixed_now_datetime = datetime(2026, 9, 15, 14, 0, 0, tzinfo=timezone.get_current_timezone())
+
+    @patch("django.utils.timezone.localdate")
+    @patch("django.utils.timezone.localtime")
+    def test_yesterday_rejected(self, mock_localtime, mock_localdate):
+        """1. yesterday -> rejected"""
+        mock_localdate.return_value = self.fixed_today
+        mock_localtime.return_value = self.fixed_now_datetime
+
+        yesterday = self.fixed_today - timedelta(days=1)
+        res = self.client.post(self.url, {
+            "date": yesterday.strftime("%Y-%m-%d"),
+            "start_time": "15:00:00",
+            "end_time": "16:00:00",
+            "consultation_methods": ["IN_PERSON"],
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("date", res.data)
+
+    @patch("django.utils.timezone.localdate")
+    @patch("django.utils.timezone.localtime")
+    def test_today_past_start_time_rejected(self, mock_localtime, mock_localdate):
+        """2. today with a past start time -> rejected"""
+        mock_localdate.return_value = self.fixed_today
+        mock_localtime.return_value = self.fixed_now_datetime
+
+        res = self.client.post(self.url, {
+            "date": self.fixed_today.strftime("%Y-%m-%d"),
+            "start_time": "13:30:00",
+            "end_time": "14:30:00",
+            "consultation_methods": ["IN_PERSON"],
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("start_time", res.data)
+
+    @patch("django.utils.timezone.localdate")
+    @patch("django.utils.timezone.localtime")
+    def test_today_equal_start_time_rejected(self, mock_localtime, mock_localdate):
+        """3. today with start time equal to current time -> rejected"""
+        mock_localdate.return_value = self.fixed_today
+        mock_localtime.return_value = self.fixed_now_datetime
+
+        res = self.client.post(self.url, {
+            "date": self.fixed_today.strftime("%Y-%m-%d"),
+            "start_time": "14:00:00",
+            "end_time": "15:00:00",
+            "consultation_methods": ["IN_PERSON"],
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("start_time", res.data)
+
+    @patch("django.utils.timezone.localdate")
+    @patch("django.utils.timezone.localtime")
+    def test_today_future_start_time_accepted(self, mock_localtime, mock_localdate):
+        """4. today with a future start time -> accepted"""
+        mock_localdate.return_value = self.fixed_today
+        mock_localtime.return_value = self.fixed_now_datetime
+
+        res = self.client.post(self.url, {
+            "date": self.fixed_today.strftime("%Y-%m-%d"),
+            "start_time": "14:30:00",
+            "end_time": "15:30:00",
+            "consultation_methods": ["IN_PERSON"],
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+    @patch("django.utils.timezone.localdate")
+    @patch("django.utils.timezone.localtime")
+    def test_tomorrow_future_date_accepted(self, mock_localtime, mock_localdate):
+        """5. tomorrow/future date -> accepted"""
+        mock_localdate.return_value = self.fixed_today
+        mock_localtime.return_value = self.fixed_now_datetime
+
+        tomorrow = self.fixed_today + timedelta(days=1)
+        res = self.client.post(self.url, {
+            "date": tomorrow.strftime("%Y-%m-%d"),
+            "start_time": "09:00:00",
+            "end_time": "10:00:00",
+            "consultation_methods": ["IN_PERSON"],
+        }, format="json")
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+    @patch("django.utils.timezone.localdate")
+    @patch("django.utils.timezone.localtime")
+    def test_end_time_before_or_equal_start_time_rejected(self, mock_localtime, mock_localdate):
+        """6. end_time <= start_time -> rejected"""
+        mock_localdate.return_value = self.fixed_today
+        mock_localtime.return_value = self.fixed_now_datetime
+
+        tomorrow = self.fixed_today + timedelta(days=1)
+        res_a = self.client.post(self.url, {
+            "date": tomorrow.strftime("%Y-%m-%d"),
+            "start_time": "10:00:00",
+            "end_time": "09:00:00",
+            "consultation_methods": ["IN_PERSON"],
+        }, format="json")
+        self.assertEqual(res_a.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("start_time", res_a.data)
+
+        res_b = self.client.post(self.url, {
+            "date": tomorrow.strftime("%Y-%m-%d"),
+            "start_time": "10:00:00",
+            "end_time": "10:00:00",
+            "consultation_methods": ["IN_PERSON"],
+        }, format="json")
+        self.assertEqual(res_b.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("start_time", res_b.data)
+
+    @patch("django.utils.timezone.localdate")
+    @patch("django.utils.timezone.localtime")
+    def test_update_existing_availability_to_past_rejected(self, mock_localtime, mock_localdate):
+        """7. updating an existing availability to a past date/time -> rejected"""
+        mock_localdate.return_value = self.fixed_today
+        mock_localtime.return_value = self.fixed_now_datetime
+
+        tomorrow = self.fixed_today + timedelta(days=1)
+        avail = Availability.objects.create(
+            midwife=self.midwife_profile,
+            date=tomorrow,
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            consultation_methods=["IN_PERSON"],
+            is_active=True,
+        )
+
+        detail_url = reverse("availability-detail", kwargs={"pk": avail.id})
+
+        yesterday = self.fixed_today - timedelta(days=1)
+        res_date = self.client.patch(detail_url, {"date": yesterday.strftime("%Y-%m-%d")}, format="json")
+        self.assertEqual(res_date.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("date", res_date.data)
+
+        res_time = self.client.patch(detail_url, {"date": self.fixed_today.strftime("%Y-%m-%d")}, format="json")
+        self.assertEqual(res_time.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("start_time", res_time.data)
+

@@ -88,9 +88,15 @@ class AvailabilitySerializer(serializers.ModelSerializer):
             data['consultation_methods'] = methods
 
         today = timezone.localdate()
-        # Validate date is not in the past (for new instances)
-        if not self.instance and target_date and target_date < today:
-            raise serializers.ValidationError({"date": "Availability cannot be created for a past date."})
+        now_time = timezone.localtime().time()
+
+        # Validate date is not in the past (for both creation and update)
+        if target_date and target_date < today:
+            raise serializers.ValidationError({"date": "Availability cannot be created or updated for a past date."})
+
+        # Validate start_time for today's date (must be strictly later than current local time)
+        if target_date == today and start_time and start_time <= now_time:
+            raise serializers.ValidationError({"start_time": "Start time must be strictly later than the current time for today's availability."})
 
         # Validate start_time < end_time
         if start_time and end_time and start_time >= end_time:
