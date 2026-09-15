@@ -43,7 +43,7 @@ class ChatSystemTestCase(APITestCase):
     def test_chat_request_creation_and_acceptance_workflow(self):
         self.client.force_authenticate(user=self.patient)
 
-        # 1. User sends chat request (FR-014 workflow)
+        # 1. User sends chat request
         url = reverse("chat-room-list")
         req_data = {
             "midwife": str(self.midwife_profile.id),

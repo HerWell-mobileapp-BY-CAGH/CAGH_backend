@@ -13,9 +13,7 @@ from .serializers import (
 
 class NotificationViewSet(viewsets.ModelViewSet):
     """
-    3.12 Notification Module
-    FR-029 Push Notifications (FCM / APNs token registration & delivery)
-    FR-030 Notification Preferences management
+    Notification Module for managing user in-app notifications, FCM push tokens, and notification preferences.
     """
 
     queryset = Notification.objects.all()
@@ -62,7 +60,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
         count = Notification.objects.filter(user=request.user, is_read=False).count()
         return Response({'unread_count': count}, status=status.HTTP_200_OK)
 
-    @extend_schema(summary="FR-030: Get or update user notification preferences", tags=["Notifications"])
+    @extend_schema(summary="Get or update user notification preferences", tags=["Notifications"])
     @action(detail=False, methods=['get', 'put', 'patch'])
     def preferences(self, request):
         pref, _ = NotificationPreference.objects.get_or_create(user=request.user)
@@ -76,7 +74,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @extend_schema(summary="FR-029: Register mobile device FCM push token", tags=["Notifications"])
+    @extend_schema(summary="Register mobile device FCM push token", tags=["Notifications"])
     @action(detail=False, methods=['post'], url_path='register-device')
     def register_device(self, request):
         token_str = request.data.get('token')

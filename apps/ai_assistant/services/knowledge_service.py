@@ -4,7 +4,7 @@ from apps.learning.models import Article, Topic, Category
 
 class KnowledgeService:
     """
-    FR-005 Weighted Knowledge Retrieval Service for CAGH AI Assistant (Phase 1).
+    Weighted Knowledge Retrieval Service for CAGH AI Assistant.
     Ranks published educational articles from apps.learning database
     using a weighted relevance scoring system:
     - Title match: +5 points

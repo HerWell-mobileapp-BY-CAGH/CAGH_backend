@@ -18,7 +18,7 @@ from .services import SafetyService, AIAssistantService
 
 def _generate_ai_health_response(question_text, user=None):
     """
-    FR-005 Deterministic Tiered Safety & Educational Knowledge Engine for HerWell/CAGH.
+    Tiered Safety & Educational Knowledge Engine for HerWell/CAGH.
     Engineered based on Ethiopian Ministry of Health (FMoH 2022) Guidelines.
 
     Features:
@@ -585,9 +585,9 @@ def _generate_ai_health_response(question_text, user=None):
 
 class AIQuestionViewSet(viewsets.ModelViewSet):
     """
-    3.2 AI Health Assistant Module (Floating AI Assistant)
-    FR-005: Conversational Reproductive & Women's Health Education, AI Safety,
-    Suggested Questions, and Thumbs Up / Down Feedback.
+    AI Health Assistant Module (Floating AI Assistant).
+    Provides conversational reproductive and maternal health guidance, AI safety checks,
+    suggested questions, and feedback mechanisms.
     """
 
     queryset = AIQuestion.objects.all()

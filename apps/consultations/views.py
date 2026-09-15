@@ -81,8 +81,8 @@ VoiceStatusResponseSerializer = inline_serializer(
 
 class ConsultationViewSet(viewsets.ModelViewSet):
     """
-    Module 4 — Consultation Management
-    Enforces all SRS business rules, atomic state transitions, strict authorization, and Agora voice session lifecycle.
+    Consultation Management ViewSet.
+    Handles consultation state transitions, access controls, and voice session lifecycles.
     """
 
     queryset = Consultation.objects.all().select_related('appointment', 'user', 'midwife', 'midwife__user').prefetch_related('notes')

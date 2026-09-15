@@ -13,6 +13,13 @@ CSRF_COOKIE_SECURE = True
 # Production database standard setup
 import dj_database_url
 if os.environ.get('DATABASE_URL'):
-    DATABASES['default'] = dj_database_url.config(conn_max_age=600, ssl_require=False)
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
+    DATABASES['default'] = dj_database_url.config(
+        conn_max_age=conn_max_age,
+        conn_health_checks=True,
+        ssl_require=False,
+    )
+    if os.environ.get('DISABLE_SERVER_SIDE_CURSORS', '').lower() == 'true':
+        DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 
 

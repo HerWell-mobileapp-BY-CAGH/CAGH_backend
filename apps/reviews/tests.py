@@ -103,16 +103,20 @@ class ReviewsTestCase(APITestCase):
         self.client.force_authenticate(user=self.admin)
 
         public_response = self.client.get(reverse("admin-public-review-list"))
+        summary_response = self.client.get(reverse("admin-review-summary"))
         midwife_response = self.client.get(
             reverse("admin-midwife-review-list", kwargs={"midwife_id": self.midwife_profile.id})
         )
 
         self.assertEqual(public_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(summary_response.status_code, status.HTTP_200_OK)
         self.assertEqual(midwife_response.status_code, status.HTTP_200_OK)
         public_results = public_response.data.get("results", public_response.data)
         midwife_results = midwife_response.data.get("results", midwife_response.data)
         self.assertEqual(str(public_results[0]["id"]), str(review.id))
         self.assertEqual(str(midwife_results[0]["id"]), str(review.id))
+        self.assertEqual(summary_response.data["total_reviews"], 1)
+        self.assertEqual(summary_response.data["average_rating"], 5.0)
 
     def test_non_admin_cannot_list_admin_reviews(self):
         self.client.force_authenticate(user=self.patient)

@@ -100,9 +100,7 @@ class HospitalViewSet(viewsets.ModelViewSet):
 
 class MidwifeProfileViewSet(viewsets.ModelViewSet):
     """
-    Midwife Profiles Management.
-    FR-014: Registration & Qualifications
-    FR-015: Admin Approval Workflow (APPROVE, REJECT, SUSPEND)
+    Manages midwife profile registrations, qualifications, and admin approval workflows.
     """
 
     queryset = MidwifeProfile.objects.all()
@@ -261,7 +259,7 @@ class ExpertiseViewSet(viewsets.ModelViewSet):
 
 class BlockedDateViewSet(viewsets.ModelViewSet):
     """
-    FR-017: Midwife Blocked Dates (Leave / Holidays).
+    Manages midwife blocked dates (leave and holidays).
     """
 
     serializer_class = BlockedDateSerializer
@@ -297,8 +295,7 @@ class SavedMidwifeViewSet(viewsets.ModelViewSet):
 
 class MidwifeDashboardView(generics.GenericAPIView):
     """
-    FR-016: Centralized Midwife Dashboard.
-    Provides today's schedule, upcoming appointments, pending requests, recent history, and status stats.
+    Provides today's schedule, upcoming appointments, pending requests, recent history, and status statistics for midwives.
     """
 
     permission_classes = [permissions.IsAuthenticated]

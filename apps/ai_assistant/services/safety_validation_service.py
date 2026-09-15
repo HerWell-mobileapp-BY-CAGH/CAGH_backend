@@ -3,7 +3,7 @@ import re
 
 class SafetyValidationService:
     """
-    FR-005 Post-Generation Safety Validation Service for CAGH AI Assistant.
+    Post-Generation Safety Validation Service for CAGH AI Assistant.
     Inspects responses before returning them to ensure no definitive medical diagnosis,
     drug prescription, or dangerous self-treatment claims exist.
     """

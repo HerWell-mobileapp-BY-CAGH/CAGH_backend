@@ -11,7 +11,7 @@ from .safety_validation_service import SafetyValidationService
 
 class AIAssistantService:
     """
-    FR-005 Main Orchestration Service for CAGH AI Assistant (Phase 1).
+    Main Orchestration Service for CAGH AI Assistant.
     Coordinates Safety Triage, Knowledge Retrieval, Conversation History,
     Response Generation, and Post-Safety Validation.
     """

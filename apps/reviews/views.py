@@ -48,7 +48,9 @@ class AdminPublicReviewListView(generics.ListAPIView):
 
     serializer_class = ReviewSerializer
     permission_classes = [IsAdmin]
-    queryset = Review.objects.select_related('user', 'midwife', 'midwife__user').all()
+    queryset = Review.objects.select_related(
+        'user', 'midwife', 'midwife__user', 'midwife__user__profile'
+    ).all()
 
     @extend_schema(
         summary="List all public reviews for administrators",
@@ -94,7 +96,7 @@ class AdminMidwifeReviewListView(generics.ListAPIView):
     def get_queryset(self):
         midwife = get_object_or_404(MidwifeProfile, pk=self.kwargs['midwife_id'])
         return Review.objects.filter(midwife=midwife).select_related(
-            'user', 'midwife', 'midwife__user'
+            'user', 'midwife', 'midwife__user', 'midwife__user__profile'
         ).order_by('-created_at')
 
 
