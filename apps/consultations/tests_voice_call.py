@@ -145,7 +145,7 @@ class VoiceCallBackendTestCase(APITestCase):
         accept_res, accept_code = VoiceCallService.accept_call(self.consultation, self.midwife_user)
         self.assertEqual(accept_code, status.HTTP_200_OK)
         self.assertEqual(accept_res["status"], "ACCEPTED")
-        self.assertIsNotNone(accept_res["agora_token"])
+        self.assertIn("ice_servers", accept_res)
 
         # 3. Connect Call (Media Audio Active)
         connect_res, connect_code = VoiceCallService.connect_call(self.consultation, self.patient)
@@ -246,11 +246,11 @@ class VoiceCallBackendTestCase(APITestCase):
                     app = init_firebase_admin()
                     self.assertIsNotNone(app)
 
-    def test_agora_token_rejected_for_terminal_call(self):
+    def test_webrtc_config_rejected_for_terminal_call(self):
         start_res = VoiceCallService.start_call(self.consultation, self.patient)
         VoiceCallService.end_call(self.consultation, self.patient)
 
-        token_res, token_code = VoiceCallService.generate_agora_token(self.consultation, self.patient)
+        token_res, token_code = VoiceCallService.get_webrtc_config(self.consultation, self.patient)
         self.assertEqual(token_code, status.HTTP_410_GONE)
         self.assertIn("error", token_res)
 
@@ -640,7 +640,7 @@ class VoiceCallBackendTestCase(APITestCase):
         res2, code2 = VoiceCallService.accept_call(self.consultation, self.midwife_user)
         self.assertEqual(code2, status.HTTP_200_OK)
         self.assertEqual(res2["status"], "ACCEPTED")
-        self.assertIsNotNone(res2["agora_token"])
+        self.assertIn("ice_servers", res2)
 
         # Check NO duplicate WS call_accepted broadcast occurred on repeat ACCEPT
         accept_ws_calls_2 = [
@@ -700,6 +700,73 @@ class VoiceCallBackendTestCase(APITestCase):
 
         with self.assertRaises(PermissionDenied):
             VoiceCallService.accept_call(self.consultation, unauth_user)
+
+    async def test_webrtc_signaling_messages_offer_answer_ice_candidate_relay(self):
+        from rest_framework_simplejwt.tokens import AccessToken
+        from channels.testing import WebsocketCommunicator
+        from config.asgi import application
+
+        consultation = self.consultation
+        session = await VoiceSession.objects.acreate(
+            consultation=consultation,
+            session_key="VOICE-WEBRTC-TEST",
+            status=VoiceSession.VoiceSessionStatus.ACCEPTED,
+            caller=self.patient,
+        )
+
+        patient_token = str(AccessToken.for_user(self.patient))
+        midwife_token = str(AccessToken.for_user(self.midwife_user))
+
+        p_comm = WebsocketCommunicator(application, f"/ws/consultation/{consultation.id}/?token={patient_token}")
+        m_comm = WebsocketCommunicator(application, f"/ws/consultation/{consultation.id}/?token={midwife_token}")
+
+        connected_p, _ = await p_comm.connect()
+        self.assertTrue(connected_p)
+
+        connected_m, _ = await m_comm.connect()
+        self.assertTrue(connected_m)
+
+        await p_comm.receive_json_from()  # peer_joined
+
+        # 1. Patient sends WebRTC offer -> Midwife receives WebRTC offer
+        await p_comm.send_json_to({
+            "type": "webrtc_offer",
+            "call_id": session.session_key,
+            "data": {"type": "offer", "sdp": "v=0\r\no=- 12345 2 IN IP4 127.0.0.1"}
+        })
+        res_offer = await m_comm.receive_json_from()
+        self.assertEqual(res_offer["type"], "webrtc_offer")
+        self.assertEqual(res_offer["data"]["type"], "offer")
+
+        # 2. Midwife sends WebRTC answer -> Patient receives WebRTC answer
+        await m_comm.send_json_to({
+            "type": "webrtc_answer",
+            "call_id": session.session_key,
+            "data": {"type": "answer", "sdp": "v=0\r\no=- 67890 2 IN IP4 127.0.0.1"}
+        })
+        res_answer = await p_comm.receive_json_from()
+        self.assertEqual(res_answer["type"], "webrtc_answer")
+        self.assertEqual(res_answer["data"]["type"], "answer")
+
+        # 3. Patient sends WebRTC ICE candidate -> Midwife receives candidate
+        await p_comm.send_json_to({
+            "type": "webrtc_ice_candidate",
+            "call_id": session.session_key,
+            "data": {"candidate": "candidate:1 1 UDP 2122260223 127.0.0.1 54321 typ host", "sdpMid": "0", "sdpMLineIndex": 0}
+        })
+        res_candidate = await m_comm.receive_json_from()
+        self.assertEqual(res_candidate["type"], "webrtc_ice_candidate")
+        self.assertEqual(res_candidate["data"]["sdpMid"], "0")
+
+        # 4. Frontend sends call_connected -> Patient receives call_connected
+        await m_comm.send_json_to({
+            "type": "call_connected"
+        })
+        res_conn = await p_comm.receive_json_from()
+        self.assertEqual(res_conn["type"], "call_connected")
+
+        await p_comm.disconnect()
+        await m_comm.disconnect()
 
 
 

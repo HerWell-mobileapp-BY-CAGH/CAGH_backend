@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path
 from datetime import timedelta
 
@@ -383,9 +384,9 @@ if not DEBUG:
 # Google Maps API Key (Optional — used for dynamic Places API facility search)
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
 
-# Agora RTC Configuration
-AGORA_APP_ID = os.environ.get('AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
-AGORA_APP_CERTIFICATE = os.environ.get('AGORA_APP_CERTIFICATE', '')
+# WebRTC ICE Configuration
+WEBRTC_STUN_SERVERS = json.loads(os.environ.get('WEBRTC_STUN_SERVERS', '["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"]'))
+WEBRTC_TURN_SERVERS = json.loads(os.environ.get('WEBRTC_TURN_SERVERS', '[]'))
 
 
 

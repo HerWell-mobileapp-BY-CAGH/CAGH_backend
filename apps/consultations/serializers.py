@@ -14,27 +14,18 @@ class ConsultationNoteSerializer(serializers.ModelSerializer):
 
 class VoiceSessionSerializer(serializers.ModelSerializer):
     caller_detail = UserSerializer(source='caller', read_only=True)
-    agora_channel_name = serializers.SerializerMethodField()
 
     class Meta:
         model = VoiceSession
         fields = '__all__'
         read_only_fields = ('id', 'consultation', 'caller')
 
-    def get_agora_channel_name(self, obj):
-        return obj.agora_channel_name or f"cagh_voice_{obj.session_key}"
-
 
 class VideoSessionSerializer(serializers.ModelSerializer):
-    agora_channel_name = serializers.SerializerMethodField()
-
     class Meta:
         model = VideoSession
         fields = '__all__'
         read_only_fields = ('id', 'consultation')
-
-    def get_agora_channel_name(self, obj):
-        return f"cagh_video_{obj.session_key}"
 
 
 

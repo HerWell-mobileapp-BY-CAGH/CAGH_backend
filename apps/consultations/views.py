@@ -17,7 +17,6 @@ from .serializers import (
     VoiceSessionSerializer,
     VideoSessionSerializer,
 )
-from .agora_service import AgoraService, Role as AgoraRole
 from .services import VoiceCallService
 from apps.appointments.models import Appointment
 from apps.notifications.models import Notification
@@ -36,8 +35,7 @@ VoiceStartResponseSerializer = inline_serializer(
         'started_at': serializers.DateTimeField(allow_null=True),
         'call_type': serializers.CharField(default='VOICE'),
         'session_key': serializers.CharField(),
-        'agora_channel_name': serializers.CharField(),
-        'agora_app_id': serializers.CharField(),
+        'call_id': serializers.CharField(),
         'caller_id': serializers.CharField(),
         'recipient_id': serializers.CharField(),
         'recipient_name': serializers.CharField(),
@@ -50,10 +48,7 @@ VoiceAcceptResponseSerializer = inline_serializer(
     fields={
         'status': serializers.CharField(default='ACCEPTED'),
         'session_key': serializers.CharField(),
-        'agora_channel_name': serializers.CharField(),
-        'agora_app_id': serializers.CharField(),
-        'agora_token': serializers.CharField(),
-        'uid': serializers.IntegerField(),
+        'call_id': serializers.CharField(),
         'started_at': serializers.DateTimeField(),
     }
 )
@@ -61,11 +56,8 @@ VoiceAcceptResponseSerializer = inline_serializer(
 VoiceTokenResponseSerializer = inline_serializer(
     name='VoiceTokenResponse',
     fields={
-        'agora_app_id': serializers.CharField(),
-        'agora_channel_name': serializers.CharField(),
-        'agora_token': serializers.CharField(),
-        'uid': serializers.IntegerField(),
         'session_key': serializers.CharField(),
+        'call_id': serializers.CharField(),
         'status': serializers.CharField(),
     }
 )
@@ -390,7 +382,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         return self._execute_voice_action_logging(request, pk, 'ACCEPT', VoiceCallService.accept_call)
 
     @extend_schema(
-        summary="Mark Call ONGOING when Agora Audio Connects",
+        summary="Mark Call ONGOING when WebRTC Media Connects",
         tags=["Consultations"],
         responses={200: VoiceStatusResponseSerializer}
     )
@@ -439,14 +431,25 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         return self._execute_voice_action_logging(request, pk, 'END', VoiceCallService.end_call)
 
     @extend_schema(
-        summary="Get authorized short-lived Agora Token for active call",
+        summary="Get WebRTC ICE server configuration for active call",
+        tags=["Consultations"],
+        responses={200: VoiceTokenResponseSerializer}
+    )
+    @action(detail=True, methods=['get', 'post'], url_path='voice-session/webrtc-config')
+    def voice_session_webrtc_config(self, request, pk=None):
+        consultation = self.get_object()
+        data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
+        return Response(data, status=code)
+
+    @extend_schema(
+        summary="Get authorized WebRTC configuration for active call (Legacy alias)",
         tags=["Consultations"],
         responses={200: VoiceTokenResponseSerializer}
     )
     @action(detail=True, methods=['get', 'post'], url_path='voice-session/token')
     def voice_session_token(self, request, pk=None):
         consultation = self.get_object()
-        data, code = VoiceCallService.generate_agora_token(consultation, request.user)
+        data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
         return Response(data, status=code)
 
     @extend_schema(summary="Manage Virtual Voice Session status", tags=["Consultations"])
@@ -474,7 +477,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             return self.voice_session_end(request, pk=pk)
         else:
             consultation = self.get_object()
-            data, code = VoiceCallService.generate_agora_token(consultation, request.user)
+            data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
             return Response(data, status=code)
 
 

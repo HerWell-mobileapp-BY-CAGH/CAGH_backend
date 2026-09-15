@@ -269,20 +269,16 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
 
     caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
     recipient_name = getattr(recipient, 'get_full_name', lambda: '')() or getattr(recipient, 'username', '') or "Recipient"
-    channel_name = agora_channel_name or (f"cagh_{call_type.lower()}_{session_key}" if session_key else f"cagh_consultation_{consultation.id}")
-    app_id = agora_app_id or getattr(settings, 'AGORA_APP_ID', '')
+    call_id_str = session_key or str(consultation.id)
 
     call_payload = {
         "type": "incoming_call",
         "action": "INCOMING_CALL",
         "consultation_id": str(consultation.id),
-        "call_id": session_key or str(consultation.id),
-        "session_id": session_key or str(consultation.id),
-        "session_key": session_key or str(consultation.id),
+        "call_id": call_id_str,
+        "session_id": call_id_str,
+        "session_key": call_id_str,
         "call_type": str(call_type),
-        "channel_name": str(channel_name),
-        "agora_channel_name": str(channel_name),
-        "agora_app_id": str(app_id),
         "caller_id": caller_id,
         "caller_name": caller_name,
         "caller_role": str(getattr(caller, 'role', 'PATIENT')),
@@ -291,6 +287,7 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
         "receiver_name": recipient_name,
         "recipient_name": recipient_name,
         "timestamp": str(int(time.time())),
+        "webrtc_enabled": "true",
     }
 
     raw_tokens = list(
