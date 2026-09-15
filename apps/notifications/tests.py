@@ -92,6 +92,7 @@ class NotificationsTestCase(APITestCase):
 
     def test_send_call_offer_push_data_only(self):
         import uuid
+        from unittest.mock import patch
         from apps.notifications.call_notifications import send_call_offer_push
         caller = User.objects.create_user(username="caller_doc", password="Password123!")
         DeviceToken.objects.create(user=self.user, token="fcm_token_test_123", platform="ANDROID")
@@ -99,14 +100,19 @@ class NotificationsTestCase(APITestCase):
         class StubConsultation:
             id = uuid.uuid4()
 
-        result = send_call_offer_push(
-            caller=caller,
-            recipient=self.user,
-            consultation=StubConsultation(),
-            call_type="VOICE",
-            session_key="VOICE-TEST-KEY",
-            agora_channel_name="cagh_test_voice_channel",
-        )
+        with patch("firebase_admin.messaging.send_each_for_multicast") as mock_send:
+            mock_send.return_value.success_count = 1
+            mock_send.return_value.failure_count = 0
+            mock_send.return_value.responses = []
+
+            result = send_call_offer_push(
+                caller=caller,
+                recipient=self.user,
+                consultation=StubConsultation(),
+                call_type="VOICE",
+                session_key="VOICE-TEST-KEY",
+                agora_channel_name="cagh_test_voice_channel",
+            )
         self.assertEqual(DeviceToken.objects.filter(user=self.user, is_active=True).count(), 1)
 
     def test_send_call_offer_push_includes_receiver_identity(self):

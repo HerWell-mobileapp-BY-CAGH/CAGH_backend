@@ -338,12 +338,21 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
 
         if response.failure_count > 0:
             for idx, resp in enumerate(response.responses):
-                if not resp.success and resp.exception:
-                    err_code = str(resp.exception)
-                    if 'Unregistered' in err_code or 'InvalidArgument' in err_code:
+                if not resp.success:
+                    exc = resp.exception
+                    err_code = getattr(exc, 'code', None) or getattr(exc, 'error_code', None) or type(exc).__name__ if exc else "UNKNOWN_ERROR"
+                    err_msg = str(exc) if exc else "No exception detail"
+
+                    logger.error(
+                        f"[CALL] call_id={session_key} event=FCM_TOKEN_FAILED receiver={recipient_id} "
+                        f"index={idx} code={err_code} message={err_msg}"
+                    )
+
+                    err_str = f"{err_code} {err_msg}".lower()
+                    if any(pattern in err_str for pattern in ['unregistered', 'invalid_argument', 'invalid-argument', 'not_found', 'not-found', 'sender_id_mismatch', 'sender-id-mismatch']):
                         stale_token = tokens[idx]
                         DeviceToken.objects.filter(token=stale_token).update(is_active=False)
-                        logger.info(f"[CALL] call_id={session_key} event=FCM_TOKEN_DEACTIVATED receiver={recipient_id}")
+                        logger.info(f"[CALL] call_id={session_key} event=FCM_TOKEN_DEACTIVATED receiver={recipient_id} index={idx} code={err_code}")
 
         return response
     except Exception as fe:
@@ -455,11 +464,20 @@ def send_general_push_notification(user, title, body, extra_data=None):
 
         if response.failure_count > 0:
             for idx, resp in enumerate(response.responses):
-                if not resp.success and resp.exception:
-                    err_code = str(resp.exception)
-                    if 'Unregistered' in err_code or 'InvalidArgument' in err_code:
+                if not resp.success:
+                    exc = resp.exception
+                    err_code = getattr(exc, 'code', None) or getattr(exc, 'error_code', None) or type(exc).__name__ if exc else "UNKNOWN_ERROR"
+                    err_msg = str(exc) if exc else "No exception detail"
+
+                    logger.error(
+                        f"[FCM] Push token failed for user {user.id} index={idx} code={err_code} message={err_msg}"
+                    )
+
+                    err_str = f"{err_code} {err_msg}".lower()
+                    if any(pattern in err_str for pattern in ['unregistered', 'invalid_argument', 'invalid-argument', 'not_found', 'not-found', 'sender_id_mismatch', 'sender-id-mismatch']):
                         stale_token = tokens[idx]
                         DeviceToken.objects.filter(token=stale_token).update(is_active=False)
+                        logger.info(f"[FCM] Token deactivated for user {user.id} index={idx} code={err_code}")
 
         return response
     except Exception as exc:
