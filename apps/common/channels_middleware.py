@@ -1,3 +1,4 @@
+import logging
 from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
@@ -6,6 +7,7 @@ from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 @database_sync_to_async
@@ -24,28 +26,28 @@ def get_user_from_token(token_string):
 
         clean_token = clean_token.strip('"').strip("'")
 
-        user_id = None
         try:
             validated_token = AccessToken(clean_token)
             user_id = validated_token.get('user_id')
-        except Exception as exc:
-            # Fallback: Extract user_id from token payload if access token has expired
-            import jwt
-            try:
-                unverified_payload = jwt.decode(clean_token, options={"verify_signature": False})
-                user_id = unverified_payload.get('user_id') or unverified_payload.get('id') or unverified_payload.get('sub')
-            except Exception:
-                print(f"[JWTAuthMiddleware] Token decode failed: {exc}")
+        except (InvalidToken, TokenError, Exception) as exc:
+            logger.warning(f"[JWTAuthMiddleware] Token validation failed: {type(exc).__name__}")
+            return AnonymousUser()
 
         if not user_id:
-            print(f"[JWTAuthMiddleware] No user_id in token claims")
+            logger.warning("[JWTAuthMiddleware] No user_id in token claims")
             return AnonymousUser()
 
         user = User.objects.get(id=user_id)
-        print(f"[JWTAuthMiddleware] AUTH SUCCESS for user: {user.username} ({user.id})")
+        if not user.is_active:
+            logger.warning(f"[JWTAuthMiddleware] Inactive user ID: {user_id}")
+            return AnonymousUser()
+        logger.info(f"[JWTAuthMiddleware] AUTH SUCCESS for user: {user.id}")
         return user
+    except User.DoesNotExist:
+        logger.warning(f"[JWTAuthMiddleware] User ID {user_id} does not exist")
+        return AnonymousUser()
     except Exception as e:
-        print(f"[JWTAuthMiddleware] AUTH ERROR: {e} (token_length={len(token_string)})")
+        logger.error(f"[JWTAuthMiddleware] AUTH ERROR: {type(e).__name__}")
         return AnonymousUser()
 
 

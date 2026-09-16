@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Consultation, ConsultationNote, VoiceSession, VideoSession
+from .models import Consultation, ConsultationNote, VoiceSession
 from apps.users.user_serializers import UserSerializer
 from apps.midwives.serializers import MidwifeProfileSerializer
 from apps.appointments.models import Appointment
@@ -21,21 +21,11 @@ class VoiceSessionSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'consultation', 'caller')
 
 
-class VideoSessionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = VideoSession
-        fields = '__all__'
-        read_only_fields = ('id', 'consultation')
-
-
-
-
 class ConsultationSerializer(serializers.ModelSerializer):
     user_detail = UserSerializer(source='user', read_only=True)
     midwife_detail = MidwifeProfileSerializer(source='midwife', read_only=True)
     notes = ConsultationNoteSerializer(many=True, read_only=True)
     voice_session = VoiceSessionSerializer(read_only=True)
-    video_session = VideoSessionSerializer(read_only=True)
 
     class Meta:
         model = Consultation

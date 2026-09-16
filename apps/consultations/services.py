@@ -95,15 +95,26 @@ class VoiceCallService:
     @classmethod
     def check_and_auto_expire_ringing_session(cls, session: VoiceSession):
         """
-        Auto-expires a ringing call if no response within RINGING_TIMEOUT_SECONDS.
+        Auto-expires a ringing call if no response within RINGING_TIMEOUT_SECONDS (45s).
+        Also auto-expires an ACCEPTED session if media never connected within stale threshold (60s).
         """
-        if session and session.status == VoiceSession.VoiceSessionStatus.RINGING:
-            reference_time = getattr(session, 'updated_at', None) or session.started_at or (session.consultation.updated_at if session.consultation else None)
+        if not session:
+            return
+
+        reference_time = getattr(session, 'updated_at', None) or session.started_at or (session.consultation.updated_at if session.consultation else None)
+        if session.status == VoiceSession.VoiceSessionStatus.RINGING:
             if reference_time and (timezone.now() - reference_time) > timedelta(seconds=RINGING_TIMEOUT_SECONDS):
                 session.status = VoiceSession.VoiceSessionStatus.MISSED
                 session.ended_at = timezone.now()
                 session.save(update_fields=['status', 'ended_at'])
                 logger.info(f"[CALL] call_id={session.session_key} event=AUTO_EXPIRED_RINGING_TIMEOUT")
+        elif session.status == VoiceSession.VoiceSessionStatus.ACCEPTED:
+            stale_threshold = getattr(settings, 'VOICE_CALL_STALE_ACCEPTED_TIMEOUT_SECONDS', 60)
+            if reference_time and (timezone.now() - reference_time) > timedelta(seconds=stale_threshold):
+                session.status = VoiceSession.VoiceSessionStatus.FAILED
+                session.ended_at = timezone.now()
+                session.save(update_fields=['status', 'ended_at'])
+                logger.info(f"[CALL] call_id={session.session_key} event=AUTO_EXPIRED_STALE_ACCEPTED_TIMEOUT")
 
     @classmethod
     def broadcast_call_status(cls, consultation: Consultation, session: VoiceSession, user, action_type: str, ended_at=None):
@@ -203,7 +214,9 @@ class VoiceCallService:
 
         active = qs.exclude(status__in=TERMINAL_CALL_STATES).order_by('-created_at').first()
         if active:
-            return active
+            cls.check_and_auto_expire_ringing_session(active)
+            if active.status not in TERMINAL_CALL_STATES:
+                return active
 
         return qs.order_by('-created_at').first()
 

@@ -10,12 +10,11 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 
-from .models import Consultation, ConsultationNote, VoiceSession, VideoSession
+from .models import Consultation, ConsultationNote, VoiceSession
 from .serializers import (
     ConsultationSerializer,
     ConsultationNoteSerializer,
     VoiceSessionSerializer,
-    VideoSessionSerializer,
 )
 from .services import VoiceCallService
 from apps.appointments.models import Appointment
@@ -90,7 +89,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(appointment_id=appointment_id)
 
         if self.action in [
-            'retrieve', 'add_note', 'start', 'complete', 'manage_voice_session', 'manage_video_session',
+            'retrieve', 'add_note', 'start', 'complete', 'manage_voice_session',
             'destroy', 'voice_session_accept', 'voice_session_connect', 'voice_session_decline',
             'voice_session_cancel', 'voice_session_missed', 'voice_session_end', 'voice_session_token'
         ]:
@@ -473,36 +472,10 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             consultation = self.get_object()
             data, code = VoiceCallService.missed_call(consultation, request.user)
             return Response(data, status=code)
-        elif action_type == 'END':
-            return self.voice_session_end(request, pk=pk)
         else:
             consultation = self.get_object()
             data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
             return Response(data, status=code)
-
-
-    @extend_schema(summary="Manage Virtual Video Session status", tags=["Consultations"])
-    @action(detail=True, methods=['post'], url_path='video-session')
-    def manage_video_session(self, request, pk=None):
-        consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-        action_type = request.data.get('action', 'STATUS')
-
-        session, _ = VideoSession.objects.get_or_create(
-            consultation=consultation,
-            defaults={"session_key": f"VIDEO-{uuid.uuid4().hex[:12].upper()}", "status": VideoSession.VideoSessionStatus.INITIATED}
-        )
-
-        if action_type == 'START':
-            session.status = 'ONGOING'
-            session.started_at = timezone.now()
-            session.save()
-        elif action_type == 'END':
-            session.status = 'ENDED'
-            session.ended_at = timezone.now()
-            session.save()
-
-        serializer = VideoSessionSerializer(session)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @extend_schema(summary="Complete consultation & record diagnosis/summary", tags=["Consultations"])
     @action(detail=True, methods=['post'])
@@ -533,11 +506,6 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             consultation.voice_session.status = VoiceSession.VoiceSessionStatus.ENDED
             consultation.voice_session.ended_at = timezone.now()
             consultation.voice_session.save()
-
-        if hasattr(consultation, 'video_session'):
-            consultation.video_session.status = VideoSession.VideoSessionStatus.ENDED
-            consultation.video_session.ended_at = timezone.now()
-            consultation.video_session.save()
 
         Notification.objects.create(
             user=consultation.user,
