@@ -979,6 +979,72 @@ class VoiceCallBackendTestCase(APITestCase):
         self.assertIsNotNone(res["session_key"])
         self.assertNotEqual(res["session_key"], "VOICE-STALE-ACCEPTED-123")
 
+    @patch("apps.notifications.call_notifications._firebase_initialized", True)
+    @patch("firebase_admin.messaging.send_each_for_multicast")
+    def test_start_call_fcm_push_payload_contract(self, mock_send):
+        """
+        Verifies the exact FCM call-offer push payload dispatched to the callee:
+        tokens, data-only payload shape, high-priority Android config, background
+        APNS. Confirms unrelated users and the caller himself never receive it.
+        """
+        mock_send.return_value.success_count = 1
+        mock_send.return_value.failure_count = 0
+
+        from apps.notifications.models import Notification
+
+        res = VoiceCallService.start_call(self.consultation, self.patient)
+
+        self.assertEqual(mock_send.call_count, 1, "Exactly one FCM send must be dispatched for a fresh call")
+
+        msg = mock_send.call_args.args[0]
+        self.assertIn("fcm_token_midwife_123", msg.tokens)
+        self.assertNotIn("fcm_token_patient_123", msg.tokens, "Caller's own token must not be pushed")
+        # No DeviceToken exists for unrelated user at all here; ensure tokens are only the callee's
+        self.assertEqual(set(msg.tokens), {"fcm_token_midwife_123"})
+
+        self.assertEqual(msg.android.priority, "high")
+        self.assertEqual(msg.android.ttl, 30)
+        self.assertEqual(msg.apns.headers.get('apns-priority'), '10')
+        self.assertEqual(msg.apns.headers.get('apns-push-type'), 'background')
+        self.assertTrue(msg.apns.payload.aps.content_available)
+
+        d = msg.data
+        self.assertEqual(d["type"], "incoming_call")
+        self.assertEqual(d["action"], "INCOMING_CALL")
+        self.assertEqual(d["call_type"], "VOICE")
+        self.assertEqual(d["webrtc_enabled"], "true")
+        self.assertEqual(d["consultation_id"], str(self.consultation.id))
+        self.assertEqual(d["caller_id"], str(self.patient.id))
+        self.assertEqual(d["receiver_id"], str(self.midwife_user.id))
+        self.assertEqual(d["recipient_id"], str(self.midwife_user.id))
+        self.assertEqual(d["session_key"], res["session_key"])
+        self.assertTrue(d["timestamp"].isdigit())
+
+        note = Notification.objects.filter(user=self.midwife_user, action="INCOMING_CALL").first()
+        self.assertIsNotNone(note)
+        self.assertIn("Incoming Voice Call", note.title)
+
+    @patch("apps.notifications.call_notifications._firebase_initialized", True)
+    @patch("firebase_admin.messaging.send_each_for_multicast")
+    def test_start_call_push_respects_recipient_device_tokens_only(self, mock_send):
+        """
+        A device token belonging to an unrelated third user must never be included
+        in the push for this consultation's callee.
+        """
+        mock_send.return_value.success_count = 1
+        mock_send.return_value.failure_count = 0
+
+        other_user = User.objects.create_user(username="outsider_push", password="Password123!")
+        DeviceToken.objects.create(
+            user=other_user, token="fcm_token_outsider_1", platform="ANDROID", is_active=True
+        )
+
+        VoiceCallService.start_call(self.consultation, self.patient)
+
+        self.assertEqual(mock_send.call_count, 1)
+        msg = mock_send.call_args.args[0]
+        self.assertEqual(set(msg.tokens), {"fcm_token_midwife_123"})
+
 
 
 
