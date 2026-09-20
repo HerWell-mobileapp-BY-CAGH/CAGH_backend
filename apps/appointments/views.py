@@ -280,6 +280,7 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
             ).exists()
 
             generated_slots.append({
+                "id": str(avail.id),
                 "availability_id": str(avail.id),
                 "date": date_str,
                 "start_time": slot_start_time.strftime("%H:%M"),
