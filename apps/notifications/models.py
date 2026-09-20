@@ -19,11 +19,14 @@ class Notification(models.Model):
     type = models.CharField(max_length=50)
     action = models.CharField(max_length=100, blank=True)
     reference_id = models.CharField(max_length=100, blank=True)
-    is_read = models.BooleanField(default=False)
+    is_read = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_read', '-created_at']),
+        ]
 
     def __str__(self):
         return f"Notification '{self.title}' for {self.user.username}"
@@ -39,8 +42,13 @@ class DeviceToken(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='device_tokens')
     token = models.CharField(max_length=500, unique=True)
     platform = models.CharField(max_length=20, choices=Platform.choices, default=Platform.ANDROID)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+        ]
 
     def __str__(self):
         return f"Token ({self.platform}) for {self.user.username}"

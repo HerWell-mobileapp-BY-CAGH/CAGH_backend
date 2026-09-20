@@ -76,13 +76,17 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     Handles consultation state transitions, access controls, and voice session lifecycles.
     """
 
-    queryset = Consultation.objects.all().select_related('appointment', 'user', 'midwife', 'midwife__user').prefetch_related('notes')
+    queryset = Consultation.objects.all().select_related(
+        'appointment', 'user', 'user__profile', 'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__hospital'
+    ).prefetch_related('notes')
     serializer_class = ConsultationSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Consultation.objects.all().select_related('appointment', 'user', 'midwife', 'midwife__user').prefetch_related('notes')
+        queryset = Consultation.objects.all().select_related(
+            'appointment', 'user', 'user__profile', 'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__hospital'
+        ).prefetch_related('notes')
 
         appointment_id = self.request.query_params.get('appointment') or self.request.query_params.get('appointment_id')
         if appointment_id:

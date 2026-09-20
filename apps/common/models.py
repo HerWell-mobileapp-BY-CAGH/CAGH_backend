@@ -17,7 +17,8 @@ class Facility(models.Model):
     facility_type = models.CharField(
         max_length=50,
         choices=FacilityType.choices,
-        default=FacilityType.HOSPITAL
+        default=FacilityType.HOSPITAL,
+        db_index=True
     )
     address = models.TextField()
     city = models.CharField(max_length=100, blank=True)
@@ -32,7 +33,7 @@ class Facility(models.Model):
     longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
     rating_average = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True, default=None, help_text="Average rating score out of 5.0 (Null if unrated)")
     image = models.ImageField(upload_to='facilities/', blank=True, null=True, help_text="Facility photo image file")
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, db_index=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -40,6 +41,9 @@ class Facility(models.Model):
     class Meta:
         verbose_name_plural = 'Facilities'
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_active', 'facility_type']),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.get_facility_type_display()})"

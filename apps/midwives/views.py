@@ -35,7 +35,7 @@ class MidwifeProfileViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        queryset = MidwifeProfile.objects.select_related('user', 'hospital').prefetch_related('qualifications', 'certificates', 'expertises')
+        queryset = MidwifeProfile.objects.select_related('user', 'user__profile', 'user__preferences', 'user__midwife_profile', 'hospital').prefetch_related('qualifications', 'certificates', 'expertises')
         user = self.request.user
 
         # Admins see all profiles
@@ -214,7 +214,9 @@ class SavedMidwifeViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return SavedMidwife.objects.filter(user=self.request.user)
+        return SavedMidwife.objects.filter(user=self.request.user).select_related(
+            'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__user__preferences', 'midwife__user__midwife_profile', 'midwife__hospital'
+        ).prefetch_related('midwife__qualifications', 'midwife__certificates', 'midwife__expertises')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

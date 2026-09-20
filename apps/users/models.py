@@ -26,7 +26,7 @@ class User(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     username = models.CharField(max_length=150, unique=True, null=True, blank=True)
     email = models.EmailField(_('email address'), unique=True, null=True, blank=True)
-    role = models.CharField(max_length=20, choices=Role.choices, default=Role.PATIENT)
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.PATIENT, db_index=True)
     phone_number = models.CharField(max_length=20, unique=True, null=True, blank=True)
 
     def __str__(self):
@@ -71,12 +71,17 @@ class OTPVerification(models.Model):
         PASSWORD_RESET = 'PASSWORD_RESET', _('Password Reset')
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    phone_number_or_email = models.CharField(max_length=100)
+    phone_number_or_email = models.CharField(max_length=100, db_index=True)
     otp_code = models.CharField(max_length=6)
     purpose = models.CharField(max_length=20, choices=Purpose.choices, default=Purpose.REGISTRATION)
     is_verified = models.BooleanField(default=False)
     expires_at = models.DateTimeField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['phone_number_or_email', 'purpose', 'is_verified']),
+        ]
 
     def __str__(self):
         return f"OTP for {self.phone_number_or_email} ({self.purpose}) - Verified: {self.is_verified}"
@@ -92,6 +97,9 @@ class EmergencyContact(models.Model):
 
     class Meta:
         ordering = ['-is_primary', 'name']
+        indexes = [
+            models.Index(fields=['user', 'is_primary']),
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.relationship}) - {self.user.username}"

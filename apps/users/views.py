@@ -656,7 +656,15 @@ class UserMeView(generics.RetrieveUpdateAPIView):
         return super().update(request, *args, **kwargs)
 
     def get_object(self):
-        return self.request.user
+        user = self.request.user
+        if user and user.is_authenticated:
+            try:
+                return User.objects.select_related(
+                    'profile', 'preferences', 'midwife_profile', 'midwife_profile__hospital'
+                ).get(pk=user.pk)
+            except User.DoesNotExist:
+                pass
+        return user
 
 
 # ---------------------------------------------------------------------------

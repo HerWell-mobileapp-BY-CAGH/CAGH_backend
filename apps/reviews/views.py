@@ -14,12 +14,12 @@ class ReviewViewSet(viewsets.ModelViewSet):
     Automatically recalculates midwife rating_average and rating_count.
     """
 
-    queryset = Review.objects.all().select_related('user', 'midwife', 'midwife__user')
+    queryset = Review.objects.all().select_related('user', 'user__profile', 'midwife', 'midwife__user', 'midwife__user__profile')
     serializer_class = ReviewSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        queryset = Review.objects.all().select_related('user', 'midwife', 'midwife__user')
+        queryset = Review.objects.all().select_related('user', 'user__profile', 'midwife', 'midwife__user', 'midwife__user__profile')
         midwife_id = self.request.query_params.get('midwife_id')
         if midwife_id:
             queryset = queryset.filter(midwife_id=midwife_id)
@@ -28,13 +28,9 @@ class ReviewViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         review = serializer.save(user=self.request.user)
 
-        # Recalculate midwife ratings
         midwife = review.midwife
-        reviews = Review.objects.filter(midwife=midwife)
-        avg = reviews.aggregate(models.Avg('rating'))['rating__avg'] or 0.00
-        count = reviews.count()
-
-        midwife.rating_average = round(avg, 2)
-        midwife.rating_count = count
+        stats = Review.objects.filter(midwife=midwife).aggregate(avg=models.Avg('rating'), count=models.Count('id'))
+        midwife.rating_average = round(stats['avg'] or 0.00, 2)
+        midwife.rating_count = stats['count'] or 0
         midwife.save(update_fields=['rating_average', 'rating_count'])
 

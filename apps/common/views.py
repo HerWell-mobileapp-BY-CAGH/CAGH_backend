@@ -281,6 +281,23 @@ class FacilityViewSet(viewsets.ModelViewSet):
                 models.Q(available_services__icontains=q)
             )
 
+        if user_lat and user_lng and radius_km:
+            try:
+                u_lat = float(user_lat)
+                u_lng = float(user_lng)
+                r_km = float(radius_km)
+                d_lat = r_km / 111.0
+                d_lng = r_km / (111.0 * max(math.cos(math.radians(u_lat)), 0.01))
+
+                queryset = queryset.filter(
+                    latitude__gte=u_lat - d_lat,
+                    latitude__lte=u_lat + d_lat,
+                    longitude__gte=u_lng - d_lng,
+                    longitude__lte=u_lng + d_lng,
+                )
+            except (ValueError, TypeError):
+                pass
+
         db_facilities = list(queryset)
 
         if user_lat and user_lng:

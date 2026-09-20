@@ -24,6 +24,9 @@ class Availability(models.Model):
     class Meta:
         ordering = ['date', 'start_time']
         verbose_name_plural = "Availabilities"
+        indexes = [
+            models.Index(fields=['midwife', 'date', 'is_active']),
+        ]
 
     def clean(self):
         super().clean()
@@ -55,6 +58,11 @@ class TimeSlot(models.Model):
     end_time = models.TimeField()
     is_available = models.BooleanField(default=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['midwife', 'date', 'is_available']),
+        ]
+
     def __str__(self):
         return f"Slot for {self.midwife.user.username} on {self.date} ({self.start_time}-{self.end_time})"
 
@@ -78,13 +86,14 @@ class Appointment(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='appointments')
     midwife = models.ForeignKey(MidwifeProfile, on_delete=models.CASCADE, related_name='appointments')
     appointment_type = models.CharField(max_length=20, choices=AppointmentType.choices)
-    scheduled_date = models.DateField()
+    scheduled_date = models.DateField(db_index=True)
     start_time = models.TimeField()
     end_time = models.TimeField()
     status = models.CharField(
         max_length=20,
         choices=AppointmentStatus.choices,
-        default=AppointmentStatus.PENDING
+        default=AppointmentStatus.PENDING,
+        db_index=True
     )
     reason = models.TextField(blank=True)
     fee = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
@@ -95,6 +104,14 @@ class Appointment(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-scheduled_date', '-start_time']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['midwife', 'status']),
+            models.Index(fields=['scheduled_date', 'start_time']),
+        ]
 
     def save(self, *args, **kwargs):
         if not self.appointment_number:

@@ -45,14 +45,22 @@ class ChatRoomSerializer(serializers.ModelSerializer):
         read_only_fields = ('id', 'user', 'status', 'created_at', 'updated_at')
 
     def get_latest_message(self, obj):
-        latest = obj.messages.order_by('-sent_at').first()
-        if latest:
-            return MessageSerializer(latest).data
-        return None
+        if hasattr(obj, 'prefetched_messages'):
+            messages = obj.prefetched_messages
+            return MessageSerializer(messages[0], context=self.context).data if messages else None
+        latest = obj.messages.select_related('sender', 'sender__profile', 'attachment').order_by('-sent_at').first()
+        return MessageSerializer(latest, context=self.context).data if latest else None
 
     def get_unread_count(self, obj):
         request = self.context.get('request')
-        if request and request.user.is_authenticated:
-            return obj.messages.exclude(sender=request.user).filter(status__in=[Message.MessageStatus.SENT, Message.MessageStatus.DELIVERED]).count()
-        return 0
+        if not request or not request.user.is_authenticated:
+            return 0
+
+        if hasattr(obj, 'prefetched_messages'):
+            return sum(
+                1 for m in obj.prefetched_messages
+                if m.sender_id != request.user.id and m.status in [Message.MessageStatus.SENT, Message.MessageStatus.DELIVERED]
+            )
+
+        return obj.messages.exclude(sender=request.user).filter(status__in=[Message.MessageStatus.SENT, Message.MessageStatus.DELIVERED]).count()
 

@@ -15,12 +15,16 @@ class ChatRoom(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='chat_rooms')
     midwife = models.ForeignKey(MidwifeProfile, on_delete=models.CASCADE, related_name='chat_rooms')
-    status = models.CharField(max_length=20, choices=RoomStatus.choices, default=RoomStatus.REQUESTED)
+    status = models.CharField(max_length=20, choices=RoomStatus.choices, default=RoomStatus.REQUESTED, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ['-updated_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['midwife', 'status']),
+        ]
 
     def __str__(self):
         return f"Chat Room ({self.user.username} & Midwife {self.midwife.user.username}) - {self.status}"
@@ -43,12 +47,16 @@ class Message(models.Model):
     sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sent_messages')
     message_type = models.CharField(max_length=20, choices=MessageType.choices, default=MessageType.TEXT)
     content = models.TextField(blank=True)
-    status = models.CharField(max_length=20, choices=MessageStatus.choices, default=MessageStatus.SENT)
-    sent_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=MessageStatus.choices, default=MessageStatus.SENT, db_index=True)
+    sent_at = models.DateTimeField(auto_now_add=True, db_index=True)
     read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['sent_at']
+        indexes = [
+            models.Index(fields=['chat_room', 'sent_at']),
+            models.Index(fields=['chat_room', 'status']),
+        ]
 
     def __str__(self):
         return f"Message by {self.sender.username} in Room {self.chat_room.id}"
