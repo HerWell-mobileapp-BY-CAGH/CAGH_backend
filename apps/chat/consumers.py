@@ -133,8 +133,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def check_room_membership(self, user, room_id):
         try:
-            room = ChatRoom.objects.get(id=room_id)
-            if user == room.user or (hasattr(user, 'midwife_profile') and user.midwife_profile == room.midwife):
+            room = ChatRoom.objects.only('id', 'user_id', 'midwife_id').get(id=room_id)
+            if user.id == room.user_id:
+                return True
+            if hasattr(user, 'midwife_profile') and user.midwife_profile.id == room.midwife_id:
                 return True
         except ChatRoom.DoesNotExist:
             pass
@@ -163,7 +165,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     size=file_size,
                 )
 
-            # Update room updated_at timestamp
             room.save(update_fields=['updated_at'])
 
             from .serializers import MessageSerializer
@@ -178,7 +179,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             status__in=[Message.MessageStatus.SENT, Message.MessageStatus.DELIVERED]
         ).exclude(sender=reader_user)
 
-        read_ids = [str(m.id) for m in unread_msgs]
-        now = timezone.now()
-        unread_msgs.update(status=Message.MessageStatus.READ, read_at=now)
+        read_ids = [str(m_id) for m_id in unread_msgs.values_list('id', flat=True)]
+        if read_ids:
+            unread_msgs.update(status=Message.MessageStatus.READ, read_at=timezone.now())
         return read_ids

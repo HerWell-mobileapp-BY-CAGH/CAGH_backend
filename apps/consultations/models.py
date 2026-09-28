@@ -30,7 +30,8 @@ class Consultation(models.Model):
     status = models.CharField(
         max_length=20,
         choices=ConsultationStatus.choices,
-        default=ConsultationStatus.SCHEDULED
+        default=ConsultationStatus.SCHEDULED,
+        db_index=True
     )
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
@@ -44,6 +45,10 @@ class Consultation(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['midwife', 'status']),
+        ]
 
     def __str__(self):
         return f"Consultation {self.id} - {self.user.username} & Midwife {self.midwife.user.username}"
@@ -102,11 +107,16 @@ class VoiceSession(models.Model):
     )
     session_key = models.CharField(max_length=255, unique=True)
     agora_channel_name = models.CharField(max_length=255, unique=True, null=True, blank=True)
-    status = models.CharField(max_length=20, choices=VoiceSessionStatus.choices, default=VoiceSessionStatus.INITIATED)
+    status = models.CharField(max_length=20, choices=VoiceSessionStatus.choices, default=VoiceSessionStatus.INITIATED, db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, null=True)
     updated_at = models.DateTimeField(auto_now=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['consultation', 'status']),
+        ]
 
     def __str__(self):
         return f"Voice Session {self.session_key} - {self.status}"

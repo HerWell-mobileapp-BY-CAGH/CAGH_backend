@@ -10,14 +10,12 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 
-from .models import Consultation, ConsultationNote, VoiceSession, VideoSession
+from .models import Consultation, ConsultationNote, VoiceSession
 from .serializers import (
     ConsultationSerializer,
     ConsultationNoteSerializer,
     VoiceSessionSerializer,
-    VideoSessionSerializer,
 )
-from .agora_service import AgoraService, Role as AgoraRole
 from .services import VoiceCallService
 from apps.appointments.models import Appointment
 from apps.notifications.models import Notification
@@ -36,8 +34,7 @@ VoiceStartResponseSerializer = inline_serializer(
         'started_at': serializers.DateTimeField(allow_null=True),
         'call_type': serializers.CharField(default='VOICE'),
         'session_key': serializers.CharField(),
-        'agora_channel_name': serializers.CharField(),
-        'agora_app_id': serializers.CharField(),
+        'call_id': serializers.CharField(),
         'caller_id': serializers.CharField(),
         'recipient_id': serializers.CharField(),
         'recipient_name': serializers.CharField(),
@@ -50,10 +47,7 @@ VoiceAcceptResponseSerializer = inline_serializer(
     fields={
         'status': serializers.CharField(default='ACCEPTED'),
         'session_key': serializers.CharField(),
-        'agora_channel_name': serializers.CharField(),
-        'agora_app_id': serializers.CharField(),
-        'agora_token': serializers.CharField(),
-        'uid': serializers.IntegerField(),
+        'call_id': serializers.CharField(),
         'started_at': serializers.DateTimeField(),
     }
 )
@@ -61,11 +55,8 @@ VoiceAcceptResponseSerializer = inline_serializer(
 VoiceTokenResponseSerializer = inline_serializer(
     name='VoiceTokenResponse',
     fields={
-        'agora_app_id': serializers.CharField(),
-        'agora_channel_name': serializers.CharField(),
-        'agora_token': serializers.CharField(),
-        'uid': serializers.IntegerField(),
         'session_key': serializers.CharField(),
+        'call_id': serializers.CharField(),
         'status': serializers.CharField(),
     }
 )
@@ -85,20 +76,24 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     Handles consultation state transitions, access controls, and voice session lifecycles.
     """
 
-    queryset = Consultation.objects.all().select_related('appointment', 'user', 'midwife', 'midwife__user').prefetch_related('notes')
+    queryset = Consultation.objects.all().select_related(
+        'appointment', 'user', 'user__profile', 'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__hospital'
+    ).prefetch_related('notes')
     serializer_class = ConsultationSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Consultation.objects.all().select_related('appointment', 'user', 'midwife', 'midwife__user').prefetch_related('notes')
+        queryset = Consultation.objects.all().select_related(
+            'appointment', 'user', 'user__profile', 'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__hospital'
+        ).prefetch_related('notes')
 
         appointment_id = self.request.query_params.get('appointment') or self.request.query_params.get('appointment_id')
         if appointment_id:
             queryset = queryset.filter(appointment_id=appointment_id)
 
         if self.action in [
-            'retrieve', 'add_note', 'start', 'complete', 'manage_voice_session', 'manage_video_session',
+            'retrieve', 'add_note', 'start', 'complete', 'manage_voice_session',
             'destroy', 'voice_session_accept', 'voice_session_connect', 'voice_session_decline',
             'voice_session_cancel', 'voice_session_missed', 'voice_session_end', 'voice_session_token'
         ]:
@@ -390,7 +385,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         return self._execute_voice_action_logging(request, pk, 'ACCEPT', VoiceCallService.accept_call)
 
     @extend_schema(
-        summary="Mark Call ONGOING when Agora Audio Connects",
+        summary="Mark Call ONGOING when WebRTC Media Connects",
         tags=["Consultations"],
         responses={200: VoiceStatusResponseSerializer}
     )
@@ -439,14 +434,25 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         return self._execute_voice_action_logging(request, pk, 'END', VoiceCallService.end_call)
 
     @extend_schema(
-        summary="Get authorized short-lived Agora Token for active call",
+        summary="Get WebRTC ICE server configuration for active call",
+        tags=["Consultations"],
+        responses={200: VoiceTokenResponseSerializer}
+    )
+    @action(detail=True, methods=['get', 'post'], url_path='voice-session/webrtc-config')
+    def voice_session_webrtc_config(self, request, pk=None):
+        consultation = self.get_object()
+        data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
+        return Response(data, status=code)
+
+    @extend_schema(
+        summary="Get authorized WebRTC configuration for active call (Legacy alias)",
         tags=["Consultations"],
         responses={200: VoiceTokenResponseSerializer}
     )
     @action(detail=True, methods=['get', 'post'], url_path='voice-session/token')
     def voice_session_token(self, request, pk=None):
         consultation = self.get_object()
-        data, code = VoiceCallService.generate_agora_token(consultation, request.user)
+        data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
         return Response(data, status=code)
 
     @extend_schema(summary="Manage Virtual Voice Session status", tags=["Consultations"])
@@ -470,36 +476,10 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             consultation = self.get_object()
             data, code = VoiceCallService.missed_call(consultation, request.user)
             return Response(data, status=code)
-        elif action_type == 'END':
-            return self.voice_session_end(request, pk=pk)
         else:
             consultation = self.get_object()
-            data, code = VoiceCallService.generate_agora_token(consultation, request.user)
+            data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
             return Response(data, status=code)
-
-
-    @extend_schema(summary="Manage Virtual Video Session status", tags=["Consultations"])
-    @action(detail=True, methods=['post'], url_path='video-session')
-    def manage_video_session(self, request, pk=None):
-        consultation, is_patient, is_midwife = self._get_consultation_and_verify_participant(request, pk)
-        action_type = request.data.get('action', 'STATUS')
-
-        session, _ = VideoSession.objects.get_or_create(
-            consultation=consultation,
-            defaults={"session_key": f"VIDEO-{uuid.uuid4().hex[:12].upper()}", "status": VideoSession.VideoSessionStatus.INITIATED}
-        )
-
-        if action_type == 'START':
-            session.status = 'ONGOING'
-            session.started_at = timezone.now()
-            session.save()
-        elif action_type == 'END':
-            session.status = 'ENDED'
-            session.ended_at = timezone.now()
-            session.save()
-
-        serializer = VideoSessionSerializer(session)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @extend_schema(summary="Complete consultation & record diagnosis/summary", tags=["Consultations"])
     @action(detail=True, methods=['post'])
@@ -530,11 +510,6 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             consultation.voice_session.status = VoiceSession.VoiceSessionStatus.ENDED
             consultation.voice_session.ended_at = timezone.now()
             consultation.voice_session.save()
-
-        if hasattr(consultation, 'video_session'):
-            consultation.video_session.status = VideoSession.VideoSessionStatus.ENDED
-            consultation.video_session.ended_at = timezone.now()
-            consultation.video_session.save()
 
         Notification.objects.create(
             user=consultation.user,

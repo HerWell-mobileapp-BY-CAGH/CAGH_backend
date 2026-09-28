@@ -21,6 +21,9 @@ class AIQuestion(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+        ]
 
     def __str__(self):
         return f"AI Q&A for {self.user.username} at {self.created_at}"

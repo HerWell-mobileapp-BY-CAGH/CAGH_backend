@@ -38,7 +38,8 @@ class MidwifeProfile(models.Model):
     verification_status = models.CharField(
         max_length=20,
         choices=VerificationStatus.choices,
-        default=VerificationStatus.PENDING
+        default=VerificationStatus.PENDING,
+        db_index=True
     )
     verified_at = models.DateTimeField(null=True, blank=True)
     verified_by = models.ForeignKey(
@@ -62,16 +63,18 @@ class MidwifeProfile(models.Model):
     consultation_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
     is_accepting_bookings = models.BooleanField(
         default=False,
-        help_text="Live status toggle: Available for new bookings (enabled after admin approval)",
+        db_index=True, help_text="Live status toggle: Available for new bookings (enabled after admin approval)",
     )
     rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
     rating_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-
     class Meta:
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['verification_status', 'is_accepting_bookings']),
+        ]
 
     def __str__(self):
         return f"Midwife {self.user.username} - {self.verification_status}"

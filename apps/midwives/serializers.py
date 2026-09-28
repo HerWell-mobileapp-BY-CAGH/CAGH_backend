@@ -108,9 +108,15 @@ class MidwifeProfileSerializer(serializers.ModelSerializer):
 
     def get_is_favorite(self, obj):
         request = self.context.get('request')
-        if request and request.user and request.user.is_authenticated:
-            return SavedMidwife.objects.filter(user=request.user, midwife=obj).exists()
-        return False
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+
+        if 'saved_midwife_ids' not in self.context:
+            self.context['saved_midwife_ids'] = set(
+                SavedMidwife.objects.filter(user=request.user).values_list('midwife_id', flat=True)
+            )
+
+        return obj.id in self.context['saved_midwife_ids']
 
 
 class SavedMidwifeSerializer(serializers.ModelSerializer):

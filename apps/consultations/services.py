@@ -5,9 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 from django.conf import settings
 from rest_framework.exceptions import PermissionDenied, ValidationError
-
 from .models import Consultation, VoiceSession
-from .agora_service import AgoraService, Role as AgoraRole
 from apps.notifications.call_notifications import send_incoming_call_notification
 
 logger = logging.getLogger(__name__)
@@ -97,15 +95,26 @@ class VoiceCallService:
     @classmethod
     def check_and_auto_expire_ringing_session(cls, session: VoiceSession):
         """
-        Auto-expires a ringing call if no response within RINGING_TIMEOUT_SECONDS.
+        Auto-expires a ringing call if no response within RINGING_TIMEOUT_SECONDS (45s).
+        Also auto-expires an ACCEPTED session if media never connected within stale threshold (60s).
         """
-        if session and session.status == VoiceSession.VoiceSessionStatus.RINGING:
-            reference_time = getattr(session, 'updated_at', None) or session.started_at or (session.consultation.updated_at if session.consultation else None)
+        if not session:
+            return
+
+        reference_time = getattr(session, 'updated_at', None) or session.started_at or (session.consultation.updated_at if session.consultation else None)
+        if session.status == VoiceSession.VoiceSessionStatus.RINGING:
             if reference_time and (timezone.now() - reference_time) > timedelta(seconds=RINGING_TIMEOUT_SECONDS):
                 session.status = VoiceSession.VoiceSessionStatus.MISSED
                 session.ended_at = timezone.now()
                 session.save(update_fields=['status', 'ended_at'])
                 logger.info(f"[CALL] call_id={session.session_key} event=AUTO_EXPIRED_RINGING_TIMEOUT")
+        elif session.status == VoiceSession.VoiceSessionStatus.ACCEPTED:
+            stale_threshold = getattr(settings, 'VOICE_CALL_STALE_ACCEPTED_TIMEOUT_SECONDS', 60)
+            if reference_time and (timezone.now() - reference_time) > timedelta(seconds=stale_threshold):
+                session.status = VoiceSession.VoiceSessionStatus.FAILED
+                session.ended_at = timezone.now()
+                session.save(update_fields=['status', 'ended_at'])
+                logger.info(f"[CALL] call_id={session.session_key} event=AUTO_EXPIRED_STALE_ACCEPTED_TIMEOUT")
 
     @classmethod
     def broadcast_call_status(cls, consultation: Consultation, session: VoiceSession, user, action_type: str, ended_at=None):
@@ -205,7 +214,9 @@ class VoiceCallService:
 
         active = qs.exclude(status__in=TERMINAL_CALL_STATES).order_by('-created_at').first()
         if active:
-            return active
+            cls.check_and_auto_expire_ringing_session(active)
+            if active.status not in TERMINAL_CALL_STATES:
+                return active
 
         return qs.order_by('-created_at').first()
 
@@ -340,11 +351,8 @@ class VoiceCallService:
                 except Exception as e:
                     logger.error(f"[CALL] call_id={session_key} event=FCM_NOTIFICATION_ERROR error={e}")
 
-        agora_token = AgoraService.generate_rtc_token(
-            channel_name=agora_channel_name,
-            uid=caller.id,
-            role=AgoraRole.PUBLISHER
-        )
+        stun_servers = getattr(settings, 'WEBRTC_STUN_SERVERS', ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"])
+        turn_servers = getattr(settings, 'WEBRTC_TURN_SERVERS', [])
 
         return {
             'status': session.status,
@@ -352,10 +360,6 @@ class VoiceCallService:
             'call_type': call_type,
             'session_key': session_key,
             'call_id': session_key,
-            'agora_channel_name': agora_channel_name,
-            'agora_app_id': agora_app_id,
-            'agora_token': agora_token,
-            'uid': AgoraService.get_numeric_uid(caller.id),
             'caller_id': str(caller.id),
             'caller_name': caller_name,
             'receiver_id': str(recipient.id) if recipient else "",
@@ -363,6 +367,10 @@ class VoiceCallService:
             'receiver_name': recipient_name,
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
+            'ice_servers': [
+                {'urls': stun_servers},
+                *turn_servers,
+            ],
         }
 
     @classmethod
@@ -415,38 +423,13 @@ class VoiceCallService:
         caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
         recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
 
-        # Only call the token builder for genuine accepts.
-        # Idempotent repeats (duplicate ACCEPT from CallKit echo, cold-start
-        # restore, etc.) still receive a valid token so the response is
-        # always usable, but we skip the unnecessary extra RtcTokenBuilder
-        # invocation to avoid the triple token-generation log noise.
-        if not is_idempotent_repeat:
-            token = AgoraService.generate_rtc_token(
-                channel_name=session.agora_channel_name,
-                uid=user.id,
-                role=AgoraRole.PUBLISHER
-            )
-        else:
-            # Re-generate once on idempotent repeat so the caller still gets
-            # a valid token, but log clearly that this is a repeat path.
-            logger.info(
-                f"[CALL] call_id={session.session_key} event=ACCEPT_TOKEN_REPEAT_GEN "
-                f"user_id={user.id} — generating token for idempotent repeat"
-            )
-            token = AgoraService.generate_rtc_token(
-                channel_name=session.agora_channel_name,
-                uid=user.id,
-                role=AgoraRole.PUBLISHER
-            )
+        stun_servers = getattr(settings, 'WEBRTC_STUN_SERVERS', ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"])
+        turn_servers = getattr(settings, 'WEBRTC_TURN_SERVERS', [])
 
         return {
             'status': session.status,
             'session_key': session.session_key,
             'call_id': session.session_key,
-            'agora_channel_name': session.agora_channel_name,
-            'agora_app_id': agora_app_id,
-            'agora_token': token,
-            'uid': AgoraService.get_numeric_uid(user.id),
             'started_at': session.started_at,
             'caller_id': str(caller.id) if caller else "",
             'caller_name': caller_name,
@@ -455,12 +438,16 @@ class VoiceCallService:
             'receiver_name': recipient_name,
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
+            'ice_servers': [
+                {'urls': stun_servers},
+                *turn_servers,
+            ],
         }, 200
 
     @classmethod
     def connect_call(cls, consultation: Consultation, user, broadcast_ws=True) -> tuple[dict, int]:
         """
-        Marks call ONGOING/ACTIVE when Agora audio connects.
+        Marks call ONGOING/ACTIVE when WebRTC media connects.
         """
         with transaction.atomic():
             cls.verify_and_resolve_participants(consultation, user)
@@ -591,10 +578,10 @@ class VoiceCallService:
         return {'status': 'ENDED', 'ended_at': session.ended_at, 'session_key': session.session_key}, 200
 
     @classmethod
-    def generate_agora_token(cls, consultation: Consultation, user) -> tuple[dict, int]:
+    def get_webrtc_config(cls, consultation: Consultation, user) -> tuple[dict, int]:
         """
-        Generates signed Agora RTC token for an active call.
-        Validates participant authorization and rejects terminal calls.
+        Retrieves WebRTC STUN/TURN ICE server configuration and call metadata for an active call.
+        Validates participant authorization and rejects terminal calls with 410 Gone.
         """
         cls.verify_and_resolve_participants(consultation, user)
         session = cls.get_voice_session(consultation, select_for_update=False)
@@ -602,16 +589,12 @@ class VoiceCallService:
             return {'error': 'No voice session found for this consultation.'}, 404
 
         cls.check_and_auto_expire_ringing_session(session)
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
 
         if session.status in TERMINAL_CALL_STATES:
             logger.warning(
-                f"[CALL] call_id={session.session_key} event=TOKEN_REJECTED_TERMINAL "
+                f"[CALL] call_id={session.session_key} event=WEBRTC_CONFIG_REJECTED_TERMINAL "
                 f"status={session.status} — returning 410 Gone"
             )
-            # Return 410 Gone so the client can distinguish "session ended" from a
-            # successful token response.  An empty token with HTTP 200 would cause
-            # the Flutter client to call Agora joinChannel("") which produces error 17.
             return {
                 'error': f"Voice session is no longer active (status: {session.status}).",
                 'status': session.status,
@@ -619,32 +602,25 @@ class VoiceCallService:
                 'call_id': session.session_key,
             }, 410
 
-        if not session.agora_channel_name:
-            session.agora_channel_name = f"cagh_voice_{session.session_key}"
-            session.save(update_fields=['agora_channel_name'])
-
-        token = AgoraService.generate_rtc_token(
-            channel_name=session.agora_channel_name,
-            uid=user.id,
-            role=AgoraRole.PUBLISHER
-        )
-
         caller = session.caller
         _, _, recipient = cls.verify_and_resolve_participants(consultation, user)
         caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
         recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
 
-        logger.info(f"[CALL] call_id={session.session_key} event=AGORA_TOKEN_GENERATED user_id={user.id}")
+        stun_servers = getattr(settings, 'WEBRTC_STUN_SERVERS', ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"])
+        turn_servers = getattr(settings, 'WEBRTC_TURN_SERVERS', [])
+
+        logger.info(f"[CALL] call_id={session.session_key} event=WEBRTC_CONFIG_GENERATED user_id={user.id}")
 
         return {
-            'agora_app_id': agora_app_id,
-            'agora_channel_name': session.agora_channel_name,
-            'agora_token': token,
-            'uid': AgoraService.get_numeric_uid(user.id),
-            'session_key': session.session_key,
             'call_id': session.session_key,
+            'session_key': session.session_key,
             'status': session.status,
             'started_at': session.started_at,
+            'ice_servers': [
+                {'urls': stun_servers},
+                *turn_servers,
+            ],
             'caller_id': str(caller.id) if caller else "",
             'caller_name': caller_name,
             'receiver_id': str(recipient.id) if recipient else "",
@@ -653,3 +629,10 @@ class VoiceCallService:
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
         }, 200
+
+    @classmethod
+    def generate_agora_token(cls, consultation: Consultation, user) -> tuple[dict, int]:
+        """
+        Backward compatibility endpoint alias for WebRTC config.
+        """
+        return cls.get_webrtc_config(consultation, user)

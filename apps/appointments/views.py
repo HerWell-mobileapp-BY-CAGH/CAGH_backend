@@ -280,6 +280,7 @@ class TimeSlotViewSet(viewsets.ReadOnlyModelViewSet):
             ).exists()
 
             generated_slots.append({
+                "id": str(avail.id),
                 "availability_id": str(avail.id),
                 "date": date_str,
                 "start_time": slot_start_time.strftime("%H:%M"),
@@ -315,13 +316,19 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     Handles appointment creation, scheduling, status updates, and notifications.
     """
 
-    queryset = Appointment.objects.all().select_related('user', 'midwife', 'midwife__user')
+    queryset = Appointment.objects.all().select_related(
+        'user', 'user__profile', 'user__preferences', 'user__midwife_profile',
+        'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__user__preferences', 'midwife__user__midwife_profile', 'midwife__hospital', 'created_by'
+    )
     serializer_class = AppointmentSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        queryset = Appointment.objects.all().select_related('user', 'midwife', 'midwife__user')
+        queryset = Appointment.objects.all().select_related(
+            'user', 'user__profile', 'user__preferences', 'user__midwife_profile',
+            'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__user__preferences', 'midwife__user__midwife_profile', 'midwife__hospital', 'created_by'
+        )
 
         if user.is_staff or getattr(user, 'role', '') == 'ADMIN':
             return queryset

@@ -29,7 +29,9 @@ class EmailOrPhoneBackend(ModelBackend):
         identifier = str(username).strip()
 
         try:
-            user = User.objects.filter(
+            user = User.objects.select_related(
+                'profile', 'preferences', 'midwife_profile', 'midwife_profile__hospital'
+            ).filter(
                 Q(email__iexact=identifier) |
                 Q(phone_number__iexact=identifier) |
                 Q(username__iexact=identifier)

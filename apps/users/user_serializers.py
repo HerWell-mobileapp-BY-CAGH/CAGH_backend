@@ -69,21 +69,26 @@ class UserSerializer(serializers.ModelSerializer):
         }
 
     def get_midwife_profile(self, obj):
-        if hasattr(obj, 'midwife_profile'):
-            mw = obj.midwife_profile
-            return {
-                "id": str(mw.id),
-                "license_number": mw.license_number,
-                "verification_status": mw.verification_status,
-                "rejection_reason": mw.rejection_reason,
+        if getattr(obj, 'role', '') != 'MIDWIFE':
+            return None
+        try:
+            mw = getattr(obj, 'midwife_profile', None)
+            if mw:
+                return {
+                    "id": str(mw.id),
+                    "license_number": mw.license_number,
+                    "verification_status": mw.verification_status,
+                    "rejection_reason": mw.rejection_reason,
                 "suspension_reason": mw.suspension_reason,
                 "specialty": mw.specialty,
-                "consultation_fee": str(mw.consultation_fee),
-                "experience_years": mw.experience_years,
-                "is_accepting_bookings": mw.is_accepting_bookings,
-                "hospital_id": str(mw.hospital.id) if mw.hospital else None,
-                "hospital_name": mw.hospital.name if mw.hospital else None,
-            }
+                    "consultation_fee": str(mw.consultation_fee),
+                    "experience_years": mw.experience_years,
+                    "is_accepting_bookings": mw.is_accepting_bookings,
+                    "hospital_id": str(mw.hospital_id) if mw.hospital_id else None,
+                    "hospital_name": mw.hospital.name if mw.hospital else None,
+                }
+        except Exception:
+            pass
         return None
 
 

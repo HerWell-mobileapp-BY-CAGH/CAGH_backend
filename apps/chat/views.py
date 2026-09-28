@@ -19,16 +19,29 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
     attachments, and read receipts.
     """
 
-    queryset = ChatRoom.objects.all().select_related('user', 'midwife', 'midwife__user')
+    queryset = ChatRoom.objects.all().select_related(
+        'user', 'user__profile', 'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__hospital'
+    )
     serializer_class = ChatRoomSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         user = self.request.user
-        queryset = ChatRoom.objects.all().select_related('user', 'midwife', 'midwife__user')
+        queryset = ChatRoom.objects.all().select_related(
+            'user', 'user__profile', 'user__preferences', 'user__midwife_profile', 'user__midwife_profile__hospital',
+            'midwife', 'midwife__user', 'midwife__user__profile', 'midwife__user__preferences', 'midwife__user__midwife_profile', 'midwife__hospital'
+        )
 
         if self.action in ['retrieve', 'accept', 'reject', 'messages', 'read']:
             return queryset
+
+        messages_qs = Message.objects.select_related(
+            'sender', 'sender__profile', 'sender__preferences', 'sender__midwife_profile', 'sender__midwife_profile__hospital', 'attachment'
+        ).order_by('-sent_at')
+        queryset = queryset.prefetch_related(
+            models.Prefetch('messages', queryset=messages_qs, to_attr='prefetched_messages'),
+            'midwife__qualifications', 'midwife__certificates', 'midwife__expertises'
+        )
 
         if hasattr(user, 'midwife_profile'):
             queryset = queryset.filter(models.Q(user=user) | models.Q(midwife=user.midwife_profile))
@@ -147,7 +160,9 @@ class ChatRoomViewSet(viewsets.ModelViewSet):
     def messages(self, request, pk=None):
         room = self.get_object()
         if request.method == 'GET':
-            messages = room.messages.select_related('sender', 'attachment').order_by('sent_at')
+            messages = room.messages.select_related(
+                'sender', 'sender__profile', 'sender__preferences', 'sender__midwife_profile', 'sender__midwife_profile__hospital', 'attachment'
+            ).order_by('sent_at')
             serializer = MessageSerializer(messages, many=True, context={'request': request})
             return Response(serializer.data, status=status.HTTP_200_OK)
 

@@ -3,7 +3,7 @@ import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
-from .models import Consultation, VoiceSession, VideoSession
+from .models import Consultation, VoiceSession
 from .services import VoiceCallService
 from apps.appointments.models import Appointment
 
@@ -211,6 +211,180 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                 }
             )
 
+        # 8. WebRTC Signaling: Offer
+        elif action_type in ['webrtc_offer', 'offer_sdp']:
+            call_id = data.get('call_id') or data.get('session_id') or self.consultation_id
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            logger.info(f"[WEBRTC] event=WEBRTC_OFFER_RECEIVED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
+            is_active = await self.is_call_active(self.consultation_id, call_id)
+            if not is_active:
+                logger.warning(f"[WEBRTC] event=WEBRTC_OFFER_REJECTED reason=call_inactive consultation_id={self.consultation_id} call_id={call_id}")
+                return
+
+            logger.info(f"[WEBRTC] event=WEBRTC_OFFER_VALIDATED call_id={call_id} sender={user.id} recipient={recipient_id}")
+            offer_payload = data.get('data') or data.get('offer') or data
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    'type': 'broadcast_webrtc_offer',
+                    'sender_id': str(user.id),
+                    'call_id': call_id,
+                    'consultation_id': self.consultation_id,
+                    'data': offer_payload,
+                }
+            )
+            if recipient_id:
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'webrtc_offer',
+                        'sender_id': str(user.id),
+                        'caller_id': str(user.id),
+                        'call_id': call_id,
+                        'consultation_id': self.consultation_id,
+                        'data': offer_payload,
+                    }
+                )
+            logger.info(f"[WEBRTC] event=WEBRTC_OFFER_FORWARDED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
+        # 9. WebRTC Signaling: Answer
+        elif action_type in ['webrtc_answer', 'answer_sdp']:
+            call_id = data.get('call_id') or data.get('session_id') or self.consultation_id
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            logger.info(f"[WEBRTC] event=WEBRTC_ANSWER_RECEIVED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
+            is_active = await self.is_call_active(self.consultation_id, call_id)
+            if not is_active:
+                logger.warning(f"[WEBRTC] event=WEBRTC_ANSWER_REJECTED reason=call_inactive consultation_id={self.consultation_id} call_id={call_id}")
+                return
+
+            logger.info(f"[WEBRTC] event=WEBRTC_ANSWER_VALIDATED call_id={call_id} sender={user.id} recipient={recipient_id}")
+            answer_payload = data.get('data') or data.get('answer') or data
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    'type': 'broadcast_webrtc_answer',
+                    'sender_id': str(user.id),
+                    'call_id': call_id,
+                    'consultation_id': self.consultation_id,
+                    'data': answer_payload,
+                }
+            )
+            if recipient_id:
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'webrtc_answer',
+                        'sender_id': str(user.id),
+                        'caller_id': str(user.id),
+                        'call_id': call_id,
+                        'consultation_id': self.consultation_id,
+                        'data': answer_payload,
+                    }
+                )
+            logger.info(f"[WEBRTC] event=WEBRTC_ANSWER_FORWARDED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
+        # 10. WebRTC Signaling: ICE Candidate
+        elif action_type in ['webrtc_ice_candidate', 'ice_candidate', 'candidate']:
+            call_id = data.get('call_id') or data.get('session_id') or self.consultation_id
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            logger.info(f"[WEBRTC] event=WEBRTC_ICE_CANDIDATE_RECEIVED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
+            is_active = await self.is_call_active(self.consultation_id, call_id)
+            if not is_active:
+                logger.warning(f"[WEBRTC] event=WEBRTC_ICE_CANDIDATE_REJECTED reason=call_inactive consultation_id={self.consultation_id} call_id={call_id}")
+                return
+
+            logger.info(f"[WEBRTC] event=WEBRTC_ICE_CANDIDATE_VALIDATED call_id={call_id} sender={user.id} recipient={recipient_id}")
+            candidate_payload = data.get('data') or data.get('candidate') or data
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    'type': 'broadcast_webrtc_ice_candidate',
+                    'sender_id': str(user.id),
+                    'call_id': call_id,
+                    'consultation_id': self.consultation_id,
+                    'data': candidate_payload,
+                }
+            )
+            if recipient_id:
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'webrtc_ice_candidate',
+                        'sender_id': str(user.id),
+                        'caller_id': str(user.id),
+                        'call_id': call_id,
+                        'consultation_id': self.consultation_id,
+                        'data': candidate_payload,
+                    }
+                )
+            logger.info(f"[WEBRTC] event=WEBRTC_ICE_CANDIDATE_FORWARDED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
+        # 11. WebRTC Signaling: Ready
+        elif action_type in ['webrtc_ready', 'ready']:
+            call_id = data.get('call_id') or data.get('session_id') or self.consultation_id
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            ready_payload = data.get('data') or data
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    'type': 'broadcast_webrtc_ready',
+                    'sender_id': str(user.id),
+                    'call_id': call_id,
+                    'consultation_id': self.consultation_id,
+                    'data': ready_payload,
+                }
+            )
+            if recipient_id:
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'webrtc_ready',
+                        'sender_id': str(user.id),
+                        'call_id': call_id,
+                        'consultation_id': self.consultation_id,
+                        'data': ready_payload,
+                    }
+                )
+
+        # 12. WebRTC Connected / Call Connected Signal
+        elif action_type in ['call_connected', 'webrtc_connected']:
+            call_id = data.get('call_id') or data.get('session_id') or self.consultation_id
+            recipient_id = await self.get_recipient_user_id(self.consultation_id, user)
+            logger.info(f"[WEBRTC] event=CALL_CONNECTED_RECEIVED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
+            is_active = await self.is_call_active(self.consultation_id, call_id)
+            if not is_active:
+                logger.warning(f"[WEBRTC] event=CALL_CONNECTED_REJECTED reason=call_inactive consultation_id={self.consultation_id} call_id={call_id}")
+                return
+
+            logger.info(f"[WEBRTC] event=CALL_CONNECTED_VALIDATED call_id={call_id} sender={user.id} recipient={recipient_id}")
+            call_type = data.get('call_type', 'VOICE')
+            await self.process_call_service_action(self.consultation_id, user, 'CONNECT', call_type=call_type)
+
+            await self.channel_layer.group_send(
+                self.group_name,
+                {
+                    'type': 'broadcast_call_connected',
+                    'sender_id': str(user.id),
+                    'consultation_id': self.consultation_id,
+                }
+            )
+            if recipient_id:
+                await self.channel_layer.group_send(
+                    f"user_calls_{recipient_id}",
+                    {
+                        'type': 'call_connected',
+                        'sender_id': str(user.id),
+                        'caller_id': str(user.id),
+                        'call_id': call_id,
+                        'consultation_id': self.consultation_id,
+                    }
+                )
+            logger.info(f"[WEBRTC] event=CALL_CONNECTED_PROCESSED call_id={call_id} sender={user.id} recipient={recipient_id}")
+
     async def broadcast_incoming_call(self, event):
         user = self.scope.get('user')
         if user and str(event.get('sender_id')) == str(user.id):
@@ -329,8 +503,100 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
                 VoiceCallService.missed_call(consultation, user, broadcast_ws=False)
             elif action_name == 'END':
                 VoiceCallService.end_call(consultation, user, broadcast_ws=False)
+            elif action_name == 'CONNECT':
+                VoiceCallService.connect_call(consultation, user, broadcast_ws=False)
         except Exception as e:
             logger.error(f"[CALL] event=WS_ACTION_ERROR action={action_name} consultation_id={consultation_id} error={e}")
+
+    async def broadcast_webrtc_offer(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
+        await self.send(text_data=json.dumps({
+            'type': 'webrtc_offer',
+            'action': 'WEBRTC_OFFER',
+            'sender_id': event['sender_id'],
+            'call_id': event.get('call_id', ''),
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
+            'data': event.get('data', {}),
+        }))
+
+    async def broadcast_webrtc_answer(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
+        await self.send(text_data=json.dumps({
+            'type': 'webrtc_answer',
+            'action': 'WEBRTC_ANSWER',
+            'sender_id': event['sender_id'],
+            'call_id': event.get('call_id', ''),
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
+            'data': event.get('data', {}),
+        }))
+
+    async def broadcast_webrtc_ice_candidate(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
+        await self.send(text_data=json.dumps({
+            'type': 'webrtc_ice_candidate',
+            'action': 'WEBRTC_ICE_CANDIDATE',
+            'sender_id': event['sender_id'],
+            'call_id': event.get('call_id', ''),
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
+            'data': event.get('data', {}),
+        }))
+
+    async def broadcast_webrtc_ready(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
+        await self.send(text_data=json.dumps({
+            'type': 'webrtc_ready',
+            'action': 'WEBRTC_READY',
+            'sender_id': event['sender_id'],
+            'call_id': event.get('call_id', ''),
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
+            'data': event.get('data', {}),
+        }))
+
+    async def broadcast_call_connected(self, event):
+        user = self.scope.get('user')
+        if user and str(event.get('sender_id')) == str(user.id):
+            return
+        await self.send(text_data=json.dumps({
+            'type': 'call_connected',
+            'action': 'CALL_CONNECTED',
+            'sender_id': event['sender_id'],
+            'consultation_id': event.get('consultation_id', getattr(self, 'consultation_id', '')),
+        }))
+
+    @database_sync_to_async
+    def is_call_active(self, consultation_id, call_id=None):
+        try:
+            consultation = Consultation.objects.filter(id=consultation_id).first()
+            if not consultation:
+                appointment = Appointment.objects.filter(id=consultation_id).first()
+                if appointment:
+                    consultation = getattr(appointment, 'consultation', None)
+            if not consultation:
+                return False
+
+            session = VoiceCallService.get_voice_session(consultation, select_for_update=False)
+            if not session:
+                return False
+
+            if call_id and session.session_key != call_id and str(consultation.id) != str(call_id):
+                return False
+
+            from .services import TERMINAL_CALL_STATES
+            if session.status in TERMINAL_CALL_STATES:
+                return False
+
+            return True
+        except Exception as e:
+            logger.error(f"[WS IS_CALL_ACTIVE ERROR] {e}")
+            return False
 
     @database_sync_to_async
     def get_recipient_user_id(self, consultation_id, user):
@@ -358,16 +624,22 @@ class ConsultationCallConsumer(AsyncWebsocketConsumer):
             if appointment:
                 consultation = getattr(appointment, 'consultation', None)
                 if not consultation:
-                    consultation, _ = Consultation.objects.get_or_create(
-                        appointment=appointment,
-                        defaults={
-                            'user': appointment.user,
-                            'midwife': appointment.midwife,
-                            'consultation_type': appointment.appointment_type,
-                            'status': Consultation.ConsultationStatus.SCHEDULED,
-                        }
-                    )
-                return str(consultation.id)
+                    try:
+                        consultation, _ = Consultation.objects.get_or_create(
+                            appointment=appointment,
+                            defaults={
+                                'user': appointment.user,
+                                'midwife': appointment.midwife,
+                                'consultation_type': appointment.appointment_type,
+                                'status': Consultation.ConsultationStatus.SCHEDULED,
+                            }
+                        )
+                    except Exception:
+                        appointment.refresh_from_db()
+                        consultation = getattr(appointment, 'consultation', None)
+                if consultation:
+                    return str(consultation.id)
+                return str(appointment.id)
         except Exception:
             pass
         return str(raw_id)
@@ -431,11 +703,168 @@ class UserCallConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data):
         try:
             data = json.loads(text_data)
-            action = data.get('type') or data.get('action')
-            if action == 'ping':
-                await self.send(text_data=json.dumps({'type': 'pong'}))
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            logger.warning("[WEBRTC] event=WEBRTC_SIGNAL_INVALID reason=json_parse_error")
+            return
+
+        action_type = data.get('type') or data.get('action')
+        if not action_type:
+            logger.warning("[WEBRTC] event=WEBRTC_SIGNAL_INVALID reason=missing_action_type")
+            return
+
+        if action_type == 'ping':
+            await self.send(text_data=json.dumps({'type': 'pong'}))
+            return
+
+        user = self.scope.get('user')
+        if not user or user.is_anonymous:
+            logger.warning(f"[WEBRTC] event=WEBRTC_SIGNAL_REJECTED signal_type={action_type} reason=unauthenticated")
+            return
+
+        sender_id = str(user.id)
+        call_id = data.get('call_id') or data.get('session_id') or data.get('session_key')
+        consultation_id = data.get('consultation_id')
+        explicit_recipient = data.get('recipient_id') or data.get('receiver_id')
+
+        logger.info(f"[WEBRTC] event=WEBRTC_SIGNAL_RECEIVED signal_type={action_type} call_id={call_id} sender_id={sender_id}")
+
+        SUPPORTED_SIGNALS = {
+            'webrtc_offer', 'webrtc_answer', 'webrtc_ice_candidate',
+            'webrtc_ready', 'call_accepted', 'call_connected'
+        }
+
+        if action_type not in SUPPORTED_SIGNALS:
+            logger.warning(f"[WEBRTC] event=WEBRTC_SIGNAL_INVALID signal_type={action_type} reason=unsupported_signal_type")
+            return
+
+        auth_result = await self.resolve_and_validate_signaling_peer(user, consultation_id, call_id, explicit_recipient)
+        is_authorized, session, consultation, recipient_id, caller_id, receiver_id, caller_name = auth_result
+
+        if not is_authorized or not recipient_id:
+            logger.warning(
+                f"[WEBRTC] event=WEBRTC_SIGNAL_REJECTED signal_type={action_type} call_id={call_id} "
+                f"sender_id={sender_id} recipient_id={explicit_recipient} reason=unauthorized_or_inactive_session"
+            )
+            return
+
+        if action_type == 'call_connected':
+            await self.process_call_connect(consultation.id if consultation else call_id, user)
+
+        payload_data = data.get('data') or {}
+        if not payload_data and action_type in ['webrtc_offer', 'webrtc_answer', 'webrtc_ice_candidate']:
+            if 'sdp' in data or 'candidate' in data:
+                payload_data = {k: v for k, v in data.items() if k in ['sdp', 'type', 'candidate', 'sdpMid', 'sdpMLineIndex']}
+
+        signal_envelope = {
+            "type": action_type,
+            "action": action_type,
+            "event": action_type,
+            "call_id": session.session_key if session else str(call_id or ''),
+            "session_id": session.session_key if session else str(call_id or ''),
+            "session_key": session.session_key if session else str(call_id or ''),
+            "consultation_id": str(consultation.id) if consultation else str(consultation_id or ''),
+            "sender_id": sender_id,
+            "caller_id": caller_id,
+            "receiver_id": receiver_id,
+            "recipient_id": recipient_id,
+            "caller_name": caller_name,
+            "call_type": data.get("call_type", "VOICE"),
+            "timestamp": str(int(timezone.now().timestamp())),
+            "data": payload_data,
+        }
+
+        # Deliver signal to recipient's personal group
+        await self.channel_layer.group_send(
+            f"user_calls_{recipient_id}",
+            {
+                'type': 'call_signal',
+                'action': action_type,
+                'sender_id': sender_id,
+                'call_id': session.session_key if session else str(call_id or ''),
+                'data': signal_envelope,
+            }
+        )
+
+        # Deliver to consultation room if available
+        if consultation:
+            await self.channel_layer.group_send(
+                f"consultation_call_{consultation.id}",
+                {
+                    'type': f"broadcast_{action_type}",
+                    'sender_id': sender_id,
+                    'call_id': session.session_key if session else str(call_id or ''),
+                    'consultation_id': str(consultation.id),
+                    'data': payload_data,
+                }
+            )
+
+        logger.info(
+            f"[WEBRTC] event=WEBRTC_SIGNAL_ROUTED signal_type={action_type} call_id={call_id} "
+            f"sender_id={sender_id} recipient_id={recipient_id} routing_result=success"
+        )
+
+    @database_sync_to_async
+    def resolve_and_validate_signaling_peer(self, user, consultation_id, call_id, explicit_recipient=None):
+        try:
+            from .services import TERMINAL_CALL_STATES
+            consultation = None
+            if consultation_id:
+                consultation = Consultation.objects.filter(id=consultation_id).first()
+                if not consultation:
+                    appointment = Appointment.objects.filter(id=consultation_id).first()
+                    if appointment and hasattr(appointment, 'consultation'):
+                        consultation = appointment.consultation
+
+            session = None
+            if call_id:
+                session = VoiceSession.objects.filter(session_key=call_id).first()
+
+            if not session and consultation:
+                session = VoiceCallService.get_voice_session(consultation, select_for_update=False)
+
+            if session and not consultation:
+                consultation = session.consultation
+
+            if not consultation:
+                return False, None, None, None, None, None, ""
+
+            if session and session.status in TERMINAL_CALL_STATES:
+                return False, None, None, None, None, None, ""
+
+            is_patient, is_midwife, recipient = VoiceCallService.verify_and_resolve_participants(consultation, user)
+            if not recipient:
+                return False, None, None, None, None, None, ""
+
+            recipient_id_str = str(recipient.id)
+            if explicit_recipient and str(explicit_recipient) != recipient_id_str:
+                logger.warning(
+                    f"[WEBRTC] event=WEBRTC_SIGNAL_REJECTED reason=recipient_mismatch "
+                    f"user={user.id} explicit={explicit_recipient} expected={recipient_id_str}"
+                )
+                return False, None, None, None, None, None, ""
+
+            caller_id_str = str(session.caller_id) if session and session.caller_id else str(consultation.user_id)
+            receiver_id_str = recipient_id_str if caller_id_str == str(user.id) else str(user.id)
+
+            caller_name = ""
+            if session and session.caller:
+                caller_name = VoiceCallService.get_display_name(session.caller) or getattr(session.caller, 'username', '')
+            elif consultation and consultation.user:
+                caller_name = VoiceCallService.get_display_name(consultation.user) or getattr(consultation.user, 'username', '')
+
+            return True, session, consultation, recipient_id_str, caller_id_str, receiver_id_str, caller_name
+        except Exception as e:
+            logger.error(f"[WS RESOLVE PEER ERROR] {e}")
+            return False, None, None, None, None, None, ""
+
+    @database_sync_to_async
+    def process_call_connect(self, consultation_id, user):
+        try:
+            consultation = Consultation.objects.filter(id=consultation_id).first()
+            if consultation:
+                VoiceCallService.connect_call(consultation, user, broadcast_ws=False)
+        except Exception as e:
+            logger.error(f"[WS PROCESS CONNECT ERROR] {e}")
 
     async def broadcast_user_incoming_call(self, event):
         await self._deliver_user_call_signal(event)
@@ -461,6 +890,21 @@ class UserCallConsumer(AsyncWebsocketConsumer):
     async def incoming_call(self, event):
         await self._deliver_user_call_signal(event)
 
+    async def webrtc_offer(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def webrtc_answer(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def webrtc_ice_candidate(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def webrtc_ready(self, event):
+        await self._deliver_user_call_signal(event)
+
+    async def call_connected(self, event):
+        await self._deliver_user_call_signal(event)
+
     async def _deliver_user_call_signal(self, data_or_event):
         if not isinstance(data_or_event, dict):
             return
@@ -468,7 +912,7 @@ class UserCallConsumer(AsyncWebsocketConsumer):
         data = data_or_event.get('data') if isinstance(data_or_event.get('data'), dict) else data_or_event
 
         user = self.scope.get('user')
-        sender_id = str(data.get('caller_id') or data.get('sender_id') or data_or_event.get('sender_id') or '')
+        sender_id = str(data.get('sender_id') or data_or_event.get('sender_id') or '')
         user_id_str = str(getattr(user, 'id', ''))
         if user and sender_id and sender_id == user_id_str:
             return  # Strictly ignore self-call notification
@@ -487,25 +931,30 @@ class UserCallConsumer(AsyncWebsocketConsumer):
         logger.info(f"[CALL-ACTION] source=WEBSOCKET action={action_log} event=SIGNAL_DELIVERED call_id={call_id} user_id={user_id_str}")
         logger.info(f"[WS] event=CALL_SIGNAL_DELIVERED user={user_id_str} action={action} call_id={call_id}")
 
+        caller_id = data.get("caller_id") or sender_id
+        receiver_id = data.get("receiver_id") or data.get("recipient_id") or user_id_str
+
         payload = {
             "action": action,
+            "type": action,
             "event": data.get("event", action),
             "call_id": call_id,
             "session_id": call_id,
             "session_key": call_id,
             "consultation_id": str(data.get("consultation_id", "") or data_or_event.get("consultation_id", "")),
             "appointment_id": str(data.get("appointment_id", "") or data_or_event.get("appointment_id", "")),
-            "caller_id": sender_id,
-            "receiver_id": str(data.get("receiver_id") or data.get("recipient_id") or user_id_str),
-            "recipient_id": str(data.get("recipient_id") or data.get("receiver_id") or user_id_str),
+            "sender_id": sender_id,
+            "caller_id": caller_id,
+            "receiver_id": receiver_id,
+            "recipient_id": str(data.get("recipient_id") or receiver_id),
             "caller_name": data.get("caller_name") or data.get("sender_name") or "Caller",
             "receiver_name": data.get("receiver_name") or data.get("recipient_name") or "",
             "recipient_name": data.get("recipient_name") or data.get("receiver_name") or "",
             "call_type": data.get("call_type", "VOICE"),
-            "agora_channel_name": data.get("agora_channel_name") or "",
-            "agora_app_id": data.get("agora_app_id") or "",
             "timestamp": data.get("timestamp") or str(int(timezone.now().timestamp())),
         }
+        if "data" in data or "data" in data_or_event:
+            payload["data"] = data.get("data") or data_or_event.get("data")
         if "status" in data or "status" in data_or_event:
             payload["status"] = data.get("status") or data_or_event.get("status")
         if "ended_at" in data or "ended_at" in data_or_event:
