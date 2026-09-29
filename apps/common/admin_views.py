@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Count
 from django.utils.translation import activate
 from django_filters.rest_framework import DjangoFilterBackend
@@ -86,6 +87,13 @@ class AdminEmergencyContactListCreateView(AdminListCreateView):
     search_fields = ("name", "relationship", "phone_number", "user__username", "user__email")
     ordering_fields = ("name", "relationship", "is_primary")
     ordering = ("user__username", "-is_primary", "name")
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        user = serializer.validated_data["user"]
+        if serializer.validated_data.get("is_primary"):
+            EmergencyContact.objects.filter(user=user, is_primary=True).update(is_primary=False)
+        serializer.save()
 
     @extend_schema(
         summary="List all emergency contacts",

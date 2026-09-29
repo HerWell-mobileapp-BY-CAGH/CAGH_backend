@@ -37,7 +37,8 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 media/
-staticfiles/
+staticfiles/*
+!staticfiles/.gitkeep
 
 # Environment variables & Secret Keys
 .env

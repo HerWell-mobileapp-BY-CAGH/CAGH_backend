@@ -509,5 +509,32 @@ class AdminUserManagementTestCase(APITestCase):
         self.assertEqual(new_admin.role, User.Role.ADMIN)
         self.assertTrue(new_admin.is_staff)
 
+    def test_duplicate_midwife_license_is_rejected_without_partial_user(self):
+        from apps.midwives.models import MidwifeProfile
+
+        MidwifeProfile.objects.create(
+            user=User.objects.create_user(
+                username="existing_license_holder",
+                email="existing-license@example.com",
+                password="Password123!",
+                role=User.Role.MIDWIFE,
+            ),
+            license_number="LIC-DUPLICATE-1",
+        )
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "duplicate-license@example.com",
+                "password": "SecurePassword123!",
+                "password_confirm": "SecurePassword123!",
+                "role": User.Role.MIDWIFE,
+                "license_number": "LIC-DUPLICATE-1",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(email="duplicate-license@example.com").exists())
+
 
 

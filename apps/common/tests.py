@@ -293,6 +293,29 @@ class AdminDirectoryManagementAPITestCase(APITestCase):
         results = list_response.data.get("results", list_response.data)
         self.assertEqual(results[0]["name"], "Aster Bekele")
 
+    def test_admin_primary_contact_replaces_existing_primary_for_user(self):
+        EmergencyContact.objects.create(
+            user=self.patient,
+            name="Existing Primary",
+            relationship="Mother",
+            phone_number="+251911111111",
+            is_primary=True,
+        )
+        response = self.client.post(
+            reverse("admin-emergency-contact-list-create"),
+            {
+                "user_id": str(self.patient.id),
+                "name": "New Primary",
+                "relationship": "Sister",
+                "phone_number": "+251922222222",
+                "is_primary": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(EmergencyContact.objects.filter(user=self.patient, is_primary=True).count(), 1)
+        self.assertEqual(EmergencyContact.objects.get(user=self.patient, is_primary=True).name, "New Primary")
+
     def test_admin_can_create_and_list_hospital(self):
         url = reverse("admin-hospital-list-create")
         create_response = self.client.post(

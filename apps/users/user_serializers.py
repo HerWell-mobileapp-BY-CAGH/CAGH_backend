@@ -9,6 +9,7 @@ import secrets
 import uuid
 
 from django.contrib.auth.password_validation import validate_password
+from django.db import transaction
 from rest_framework import serializers
 from .models import User, Profile, EmergencyContact, SOSLog, UserPreference
 
@@ -144,6 +145,14 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("This username is already taken.")
         return value
 
+    def validate_license_number(self, value):
+        value = value.strip() if value else value
+        if value and self.initial_data.get("role") == User.Role.MIDWIFE:
+            from apps.midwives.models import MidwifeProfile
+            if MidwifeProfile.objects.filter(license_number=value).exists():
+                raise serializers.ValidationError("A midwife with this license number already exists.")
+        return value
+
     def validate(self, attrs):
         if not attrs.get("email") and not attrs.get("phone_number"):
             raise serializers.ValidationError(
@@ -164,6 +173,7 @@ class AdminUserCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Midwife professional fields can only be used when role is MIDWIFE.")
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
         password = validated_data.pop("password", "")
         validated_data.pop("password_confirm", None)
