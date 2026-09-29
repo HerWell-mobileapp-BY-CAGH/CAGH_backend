@@ -1,5 +1,6 @@
 from django.db import models
 from rest_framework import viewsets, permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from drf_spectacular.utils import extend_schema, OpenApiResponse
@@ -11,6 +12,20 @@ from .serializers import (
     ArticleSerializer,
     BookmarkSerializer
 )
+from .permissions import IsAdminOrReadOnly
+from apps.users.models import User
+
+
+def is_learning_admin(user):
+    """Return whether ``user`` may see editorial-only Learning Center data."""
+    if not (user and user.is_authenticated):
+        return False
+
+    # ``role`` is the source of truth for API-created admins; ``is_staff``
+    # preserves normal Django-superuser access.
+    return user.is_staff or (
+        User.Role.normalize(getattr(user, 'role', None)) == User.Role.ADMIN
+    )
 
 
 class CategoryViewSet(viewsets.ModelViewSet):
@@ -25,7 +40,8 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
     queryset = Category.objects.all().prefetch_related('topics')
     serializer_class = CategorySerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    # GET is public, while POST/PATCH/PUT/DELETE require an administrator.
+    permission_classes = [IsAdminOrReadOnly]
     lookup_field = 'id'
 
 
@@ -36,7 +52,8 @@ class TopicViewSet(viewsets.ModelViewSet):
 
     queryset = Topic.objects.all().select_related('category')
     serializer_class = TopicSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    # Topics are public to read, but their editorial lifecycle is admin-only.
+    permission_classes = [IsAdminOrReadOnly]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -59,13 +76,15 @@ class ArticleViewSet(viewsets.ModelViewSet):
 
     queryset = Article.objects.all().select_related('topic', 'topic__category', 'author', 'next_article')
     serializer_class = ArticleSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    # Creating, editing, archiving, or deleting articles is admin-only.
+    permission_classes = [IsAdminOrReadOnly]
 
     def get_queryset(self):
         queryset = self.queryset
 
-        # Non-staff users only see PUBLISHED articles
-        if not (self.request.user and (self.request.user.is_staff or getattr(self.request.user, 'role', '') == 'ADMIN')):
+        # Patients, midwives, and anonymous users must never receive drafts,
+        # under-review material, or archived material from list *or* detail.
+        if not is_learning_admin(self.request.user):
             queryset = queryset.filter(status=Article.ArticleStatus.PUBLISHED)
 
         # Filters
@@ -73,6 +92,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
         category_id = self.request.query_params.get('category')
         category_slug = self.request.query_params.get('category_slug')
         content_type = self.request.query_params.get('content_type')
+        material_status = self.request.query_params.get('status')
         search_query = self.request.query_params.get('q') or self.request.query_params.get('search')
 
         if topic_id:
@@ -83,6 +103,16 @@ class ArticleViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(topic__category__slug=category_slug)
         if content_type:
             queryset = queryset.filter(content_type=content_type)
+        if material_status:
+            normalized_status = material_status.upper()
+            valid_statuses = set(Article.ArticleStatus.values)
+            if normalized_status not in valid_statuses:
+                raise ValidationError({
+                    'status': 'Use one of: DRAFT, REVIEW, PUBLISHED, ARCHIVED.'
+                })
+            # Non-admin requests have already been restricted to PUBLISHED;
+            # retaining that restriction prevents status-query data leaks.
+            queryset = queryset.filter(status=normalized_status)
         if search_query:
             q = search_query.strip()
             queryset = queryset.filter(
@@ -103,6 +133,7 @@ class ArticleViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def perform_create(self, serializer):
+        # IsAdminOrReadOnly protects this path; attribution remains server-set.
         serializer.save(author=self.request.user)
 
     @extend_schema(summary="Toggle bookmark status for an article", tags=["Learning"])

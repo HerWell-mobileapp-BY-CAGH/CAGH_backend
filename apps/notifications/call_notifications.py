@@ -248,6 +248,19 @@ def init_firebase_admin():
 init_firebase_admin()
 
 
+def _get_initialized_firebase_app():
+    """Return the Firebase app after initialization, reusing the default app."""
+    if not _firebase_initialized:
+        return init_firebase_admin()
+
+    try:
+        import firebase_admin
+        return firebase_admin.get_app()
+    except (ImportError, ValueError):
+        # FCM calls can still be mocked in tests where initialization is mocked.
+        return None
+
+
 def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
     """
     Sends a DATA-ONLY high-priority FCM call offer push notification to ring the recipient device.
@@ -262,8 +275,8 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
         logger.info(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=recipient_missing_or_self caller_id={caller_id} receiver_id={recipient_id}")
         return None
 
-    fb_app = init_firebase_admin()
-    if not fb_app:
+    fb_app = _get_initialized_firebase_app()
+    if not _firebase_initialized:
         logger.warning(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=firebase_not_initialized receiver={recipient_id}")
         return None
 
@@ -416,8 +429,8 @@ def send_general_push_notification(user, title, body, extra_data=None):
         logger.info(f"[FCM] Push skipped for user {user.id}: disabled in preferences")
         return None
 
-    fb_app = init_firebase_admin()
-    if not fb_app:
+    fb_app = _get_initialized_firebase_app()
+    if not _firebase_initialized:
         logger.warning(f"[FCM] Push skipped for user {user.id}: Firebase not initialized")
         return None
 
