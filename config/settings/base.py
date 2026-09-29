@@ -282,6 +282,14 @@ CORS_ALLOWED_ORIGINS = [
     ).split(',')
     if origin.strip()
 ]
+# Keep the admin dashboard origins allowed even when a deployment provides its
+# own CORS_ALLOWED_ORIGINS value. Browser origins must not include a trailing slash.
+for origin in (
+    'http://localhost:5173',
+    'https://cagh-admin-u2o9.vercel.app',
+):
+    if origin not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(origin)
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^http://localhost(:\d+)?$",
