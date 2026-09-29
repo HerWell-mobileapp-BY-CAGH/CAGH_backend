@@ -46,6 +46,7 @@ urlpatterns = [
     path("api/v1/reviews/", include("apps.reviews.urls")),
     path("api/v1/ai-assistant/", include("apps.ai_assistant.urls")),
     path("api/v1/common/", include("apps.common.urls")),
+    path("api/v1/admin/", include("apps.common.admin_urls")),
 ]
 
 # Serve media & static in development

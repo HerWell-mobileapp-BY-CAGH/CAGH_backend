@@ -9,6 +9,9 @@ from .views import (
     BlockedDateViewSet,
     SavedMidwifeViewSet,
     MidwifeDashboardView,
+    MidwifeApplicationListView,
+    MidwifeApplicationDetailView,
+    MidwifeApplicationReviewView,
 )
 
 router = DefaultRouter()
@@ -21,6 +24,9 @@ router.register(r'blocked-dates', BlockedDateViewSet, basename='midwife-blocked-
 router.register(r'saved', SavedMidwifeViewSet, basename='saved-midwife')
 
 urlpatterns = [
+    path('applications/', MidwifeApplicationListView.as_view(), name='midwife-applications-list'),
+    path('applications/<uuid:pk>/', MidwifeApplicationDetailView.as_view(), name='midwife-application-detail'),
+    path('applications/<uuid:pk>/review/', MidwifeApplicationReviewView.as_view(), name='midwife-application-review'),
     path('dashboard/', MidwifeDashboardView.as_view(), name='midwife-dashboard'),
     path('', include(router.urls)),
 ]

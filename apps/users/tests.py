@@ -2,12 +2,58 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from apps.users.models import OTPVerification
 
 User = get_user_model()
 
 
 class AuthenticationTestCase(APITestCase):
+
+    def test_admin_can_change_password_from_admin_route(self):
+        admin = User.objects.create_user(
+            username="password_admin",
+            email="password-admin@example.com",
+            password="OldAdminPassword123!",
+            role=User.Role.ADMIN,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=admin)
+
+        response = self.client.post(
+            reverse("auth-admin-password-change"),
+            {
+                "old_password": "OldAdminPassword123!",
+                "new_password": "NewAdminPassword123!",
+                "new_password_confirm": "NewAdminPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn("access", response.data)
+        admin.refresh_from_db()
+        self.assertTrue(admin.check_password("NewAdminPassword123!"))
+
+    def test_non_admin_cannot_use_admin_password_route(self):
+        patient = User.objects.create_user(
+            username="patient_password_route",
+            email="patient-password-route@example.com",
+            password="PatientPassword123!",
+        )
+        self.client.force_authenticate(user=patient)
+
+        response = self.client.post(
+            reverse("auth-admin-password-change"),
+            {
+                "old_password": "PatientPassword123!",
+                "new_password": "AnotherPassword123!",
+                "new_password_confirm": "AnotherPassword123!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_email_registration_without_username(self):
         url = reverse("auth-register")
@@ -226,6 +272,53 @@ class AuthenticationTestCase(APITestCase):
         self.assertEqual(res_no_role.status_code, status.HTTP_200_OK)
         self.assertEqual(res_no_role.data["user"]["role"], User.Role.MIDWIFE)
 
+    def test_admin_login_requires_provisioned_admin_account(self):
+        """Only an account with ADMIN role and Django staff access gets admin JWTs."""
+        url = reverse("auth-admin-login")
+        password = "AdminPassword123!"
+
+        admin_user = User.objects.create_user(
+            username="dashboard_admin",
+            email="dashboard-admin@example.com",
+            password=password,
+            role=User.Role.ADMIN,
+            is_staff=True,
+        )
+        allowed = self.client.post(
+            url,
+            {"email": admin_user.email, "password": password},
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+        self.assertEqual(allowed.data["login_role"], User.Role.ADMIN)
+
+        patient = User.objects.create_user(
+            username="not_an_admin",
+            email="not-an-admin@example.com",
+            password=password,
+            role=User.Role.PATIENT,
+        )
+        denied = self.client.post(
+            url,
+            {"email": patient.email, "password": password},
+            format="json",
+        )
+        self.assertEqual(denied.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_public_registration_cannot_create_admin(self):
+        """The public registration API must never mint privileged accounts."""
+        response = self.client.post(
+            reverse("auth-register"),
+            {
+                "email": "attempted-admin@example.com",
+                "password": "SecurePassword123!",
+                "password_confirm": "SecurePassword123!",
+                "role": "ADMIN",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_otp_login_role_mismatch_fails(self):
         midwife = User.objects.create_user(
             username="midwife_otp_user",
@@ -334,6 +427,114 @@ class UserManagementTestCase(APITestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["default_call_url"], "tel:0996717744")
         self.assertGreater(len(res.data["hotlines"]), 0)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class AdminUserManagementTestCase(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username="user_manager_admin",
+            email="user-manager-admin@example.com",
+            password="AdminPassword123!",
+        )
+        self.patient = User.objects.create_user(
+            username="listed_patient",
+            email="listed-patient@example.com",
+            password="PatientPassword123!",
+        )
+        self.url = reverse("admin-user-list-create")
+
+    def test_only_admin_can_list_users(self):
+        self.client.force_authenticate(user=self.patient)
+        self.assertEqual(self.client.get(self.url).status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url, {"search": "listed-patient"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get("results", response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["email"], self.patient.email)
+
+    def test_admin_can_create_midwife_user(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "provisioned-midwife@example.com",
+                "password": "SecurePassword123!",
+                "password_confirm": "SecurePassword123!",
+                "role": User.Role.MIDWIFE,
+                "first_name": "Abeba",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        user = User.objects.get(email="provisioned-midwife@example.com")
+        self.assertTrue(user.check_password("SecurePassword123!"))
+        self.assertEqual(user.profile.first_name, "Abeba")
+        self.assertTrue(hasattr(user, "midwife_profile"))
+
+    def test_admin_can_issue_temporary_password(self):
+        """A generated credential is returned once and marked for replacement."""
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "temporary-password@example.com",
+                "role": User.Role.PATIENT,
+                "generate_temporary_password": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        temporary_password = response.data["temporary_password"]
+        user = User.objects.get(email="temporary-password@example.com")
+        self.assertTrue(user.check_password(temporary_password))
+        self.assertTrue(user.must_change_password)
+
+    def test_admin_can_provision_an_administrator(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "new-admin@example.com",
+                "password": "NewAdminPassword123!",
+                "password_confirm": "NewAdminPassword123!",
+                "role": User.Role.ADMIN,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        new_admin = User.objects.get(email="new-admin@example.com")
+        self.assertEqual(new_admin.role, User.Role.ADMIN)
+        self.assertTrue(new_admin.is_staff)
+
+    def test_duplicate_midwife_license_is_rejected_without_partial_user(self):
+        from apps.midwives.models import MidwifeProfile
+
+        MidwifeProfile.objects.create(
+            user=User.objects.create_user(
+                username="existing_license_holder",
+                email="existing-license@example.com",
+                password="Password123!",
+                role=User.Role.MIDWIFE,
+            ),
+            license_number="LIC-DUPLICATE-1",
+        )
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.post(
+            self.url,
+            {
+                "email": "duplicate-license@example.com",
+                "password": "SecurePassword123!",
+                "password_confirm": "SecurePassword123!",
+                "role": User.Role.MIDWIFE,
+                "license_number": "LIC-DUPLICATE-1",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(User.objects.filter(email="duplicate-license@example.com").exists())
 
 
 

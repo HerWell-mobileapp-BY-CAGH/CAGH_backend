@@ -19,11 +19,12 @@ POST  /api/v1/auth/password/reset/otp/confirm/ — confirm password reset via OT
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
 
-from .authentication import CustomTokenObtainPairView
+from .authentication import CustomTokenObtainPairView, AdminTokenObtainPairView
 from .views import (
     UserRegistrationView,
     LogoutView,
     PasswordChangeView,
+    AdminPasswordChangeView,
     PasswordResetRequestView,
     PasswordResetConfirmView,
     SendOTPView,
@@ -39,6 +40,9 @@ urlpatterns = [
 
     # ---------- JWT ----------
     path("login/", CustomTokenObtainPairView.as_view(), name="auth-login"),
+    # A separate endpoint avoids using a client-provided role value as the
+    # decision for administrator-dashboard access.
+    path("admin/login/", AdminTokenObtainPairView.as_view(), name="auth-admin-login"),
     path("login/otp/", OTPLoginView.as_view(), name="auth-login-otp"),
     path("logout/", LogoutView.as_view(), name="auth-logout"),
     path("token/refresh/", TokenRefreshView.as_view(), name="auth-token-refresh"),
@@ -50,6 +54,7 @@ urlpatterns = [
 
     # ---------- Password ----------
     path("password/change/", PasswordChangeView.as_view(), name="auth-password-change"),
+    path("admin/password/change/", AdminPasswordChangeView.as_view(), name="auth-admin-password-change"),
     path("password/reset/", PasswordResetRequestView.as_view(), name="auth-password-reset"),
     path("password/reset/confirm/", PasswordResetConfirmView.as_view(), name="auth-password-reset-confirm"),
     path("password/reset/otp/", PasswordResetOTPRequestView.as_view(), name="auth-password-reset-otp"),

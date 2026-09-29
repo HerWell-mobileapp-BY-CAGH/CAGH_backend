@@ -117,8 +117,14 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
         if raw_val:
             normalized = User.Role.normalize(raw_val)
-            if normalized in (User.Role.PATIENT, User.Role.MIDWIFE, User.Role.ADMIN):
+            # Privileged accounts must be provisioned by an existing admin;
+            # public registration may create only patient or midwife accounts.
+            if normalized in (User.Role.PATIENT, User.Role.MIDWIFE):
                 return normalized
+            if normalized == User.Role.ADMIN:
+                raise serializers.ValidationError(
+                    "Admin accounts cannot be created through public registration."
+                )
         return User.Role.PATIENT
 
     def validate_email(self, value):
@@ -143,6 +149,23 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         return value or None
 
     def validate(self, attrs):
+        # Some clients use expected_role/user_type rather than role.  Normalize
+        # those aliases here even when the model field default supplied PATIENT.
+        initial = getattr(self, "initial_data", {}) or {}
+        raw_role = (
+            initial.get("role") or initial.get("expected_role") or initial.get("user_type")
+            or initial.get("account_type") or initial.get("type")
+        )
+        if initial.get("is_midwife") is True or str(initial.get("is_midwife", "")).lower() == "true":
+            raw_role = User.Role.MIDWIFE
+        if raw_role:
+            normalized_role = User.Role.normalize(raw_role)
+            if normalized_role == User.Role.ADMIN:
+                raise serializers.ValidationError({"role": "Admin accounts cannot be created through public registration."})
+            if normalized_role not in (User.Role.PATIENT, User.Role.MIDWIFE):
+                raise serializers.ValidationError({"role": "Role must be PATIENT or MIDWIFE."})
+            attrs["role"] = normalized_role
+
         email = attrs.get("email")
         phone_number = attrs.get("phone_number")
         password = attrs.get("password")
@@ -223,7 +246,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
             MidwifeProfile.objects.get_or_create(
                 user=user,
-                defaults=defaults
+                # Keep the submitted licence number when supplied; otherwise
+                # create a valid placeholder for the existing unique field.
+                defaults={
+                    **defaults,
+                    "license_number": defaults.get(
+                        "license_number", f"LIC-{uuid.uuid4().hex[:8].upper()}"
+                    ),
+                    "verification_status": MidwifeProfile.VerificationStatus.PENDING,
+                    "is_accepting_bookings": False,
+                }
             )
 
         return user

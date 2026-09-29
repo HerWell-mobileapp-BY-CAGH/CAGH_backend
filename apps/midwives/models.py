@@ -49,9 +49,22 @@ class MidwifeProfile(models.Model):
         blank=True,
         related_name='verified_midwives'
     )
+    rejection_reason = models.TextField(
+        blank=True,
+        default="",
+        help_text="Admin-provided reason when a midwife application is rejected.",
+    )
+    suspension_reason = models.TextField(
+        blank=True,
+        default="",
+        help_text="Admin-provided reason when an approved midwife account is suspended.",
+    )
     specialty = models.CharField(max_length=150, blank=True, default="Maternal Health Specialist")
     consultation_fee = models.DecimalField(max_digits=8, decimal_places=2, default=0.00)
-    is_accepting_bookings = models.BooleanField(default=True, db_index=True, help_text="Live status toggle: Available for new bookings")
+    is_accepting_bookings = models.BooleanField(
+        default=False,
+        db_index=True, help_text="Live status toggle: Available for new bookings (enabled after admin approval)",
+    )
     rating_average = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)
     rating_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)

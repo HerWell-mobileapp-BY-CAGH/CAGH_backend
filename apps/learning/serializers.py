@@ -10,6 +10,8 @@ class TopicSerializer(serializers.ModelSerializer):
     class Meta:
         model = Topic
         fields = '__all__'
+        # These are calculated response fields, never client supplied values.
+        read_only_fields = ('id', 'category_name', 'articles_count')
 
     def get_articles_count(self, obj):
         return obj.articles.filter(status=Article.ArticleStatus.PUBLISHED).count()
@@ -22,6 +24,8 @@ class CategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Category
         fields = '__all__'
+        # Nested topics and the count are response-only representations.
+        read_only_fields = ('id', 'topics', 'topics_count')
 
     def get_topics_count(self, obj):
         return obj.topics.count()
@@ -37,7 +41,13 @@ class ArticleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Article
         fields = '__all__'
-        read_only_fields = ('id', 'author', 'views_count', 'created_at', 'updated_at')
+        # The server owns attribution and analytics.  In particular, clients
+        # must not be able to create an article in another user's name.
+        read_only_fields = (
+            'id', 'author', 'author_name', 'topic_name', 'category_name',
+            'is_bookmarked', 'next_article_detail', 'views_count',
+            'created_at', 'updated_at',
+        )
 
     def get_author_name(self, obj):
         if obj.author:

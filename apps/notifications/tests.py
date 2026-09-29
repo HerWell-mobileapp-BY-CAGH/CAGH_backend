@@ -100,7 +100,8 @@ class NotificationsTestCase(APITestCase):
         class StubConsultation:
             id = uuid.uuid4()
 
-        with patch("firebase_admin.messaging.send_each_for_multicast") as mock_send:
+        with patch("apps.notifications.call_notifications._firebase_initialized", True), \
+             patch("firebase_admin.messaging.send_each_for_multicast") as mock_send:
             mock_send.return_value.success_count = 1
             mock_send.return_value.failure_count = 0
             mock_send.return_value.responses = []

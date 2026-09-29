@@ -1,6 +1,7 @@
 import os
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 
 User = get_user_model()
 
@@ -13,23 +14,30 @@ class Command(BaseCommand):
         email = os.environ.get("ADMIN_EMAIL", "admin@cagh.org")
         password = os.environ.get("ADMIN_PASSWORD", "AdminPass123!")
 
-        user, created = User.objects.get_or_create(
-            username=username,
-            defaults={
-                "email": email,
-                "role": User.Role.ADMIN if hasattr(User, "Role") else "ADMIN",
-                "is_staff": True,
-                "is_superuser": True,
-            },
-        )
+        user = User.objects.filter(
+            Q(username__iexact=username) | Q(email__iexact=email)
+        ).first()
 
-        user.email = email
-        user.is_staff = True
-        user.is_superuser = True
-        if hasattr(user, "Role"):
-            user.role = User.Role.ADMIN
-        user.set_password(password)
-        user.save()
+        created = False
+        if user is None:
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+                role=User.Role.ADMIN if hasattr(User, "Role") else "ADMIN",
+                is_staff=True,
+                is_superuser=True,
+            )
+            created = True
+        else:
+            user.username = username
+            user.email = email
+            user.is_staff = True
+            user.is_superuser = True
+            if hasattr(user, "Role"):
+                user.role = User.Role.ADMIN
+            user.set_password(password)
+            user.save()
 
         action = "Created" if created else "Reset"
         self.stdout.write(self.style.SUCCESS(f"Successfully {action} admin user '{username}' ({email})."))

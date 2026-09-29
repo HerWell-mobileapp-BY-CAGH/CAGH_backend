@@ -34,6 +34,13 @@ class ReviewsTestCase(APITestCase):
             license_number="MW-REV-500",
             verification_status="APPROVED",
         )
+        self.admin = User.objects.create_user(
+            username="reviews_admin",
+            email="reviews-admin@example.com",
+            password="AdminPassword123!",
+            role="ADMIN",
+            is_staff=True,
+        )
 
         self.appointment = Appointment.objects.create(
             user=self.patient,
@@ -85,3 +92,33 @@ class ReviewsTestCase(APITestCase):
         res = self.client.post(url, data, format="json")
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         self.assertEqual(res.data["reviewer_name"], "Anonymous")
+
+    def test_admin_can_list_public_reviews_and_reviews_for_a_midwife(self):
+        review = Review.objects.create(
+            user=self.patient,
+            midwife=self.midwife_profile,
+            rating=5,
+            comment="Very helpful.",
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        public_response = self.client.get(reverse("admin-public-review-list"))
+        summary_response = self.client.get(reverse("admin-review-summary"))
+        midwife_response = self.client.get(
+            reverse("admin-midwife-review-list", kwargs={"midwife_id": self.midwife_profile.id})
+        )
+
+        self.assertEqual(public_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(summary_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(midwife_response.status_code, status.HTTP_200_OK)
+        public_results = public_response.data.get("results", public_response.data)
+        midwife_results = midwife_response.data.get("results", midwife_response.data)
+        self.assertEqual(str(public_results[0]["id"]), str(review.id))
+        self.assertEqual(str(midwife_results[0]["id"]), str(review.id))
+        self.assertEqual(summary_response.data["total_reviews"], 1)
+        self.assertEqual(summary_response.data["average_rating"], 5.0)
+
+    def test_non_admin_cannot_list_admin_reviews(self):
+        self.client.force_authenticate(user=self.patient)
+        response = self.client.get(reverse("admin-public-review-list"))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

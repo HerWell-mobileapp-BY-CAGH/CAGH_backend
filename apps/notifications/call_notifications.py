@@ -233,11 +233,7 @@ def init_firebase_admin():
             return app
 
         _firebase_initialized = False
-        logger.error("[FIREBASE] initialization_failed error=credentials_unavailable")
-        return None
-    except Exception as e:
-        _firebase_initialized = False
-        logger.error(f"[FIREBASE] initialization_failed error={e}")
+        logger.info("[FIREBASE] initialization_skipped reason=credentials_unavailable")
         return None
     except Exception as e:
         _firebase_initialized = False
@@ -246,6 +242,29 @@ def init_firebase_admin():
 
 
 init_firebase_admin()
+
+
+def _get_initialized_firebase_app():
+    """Return the Firebase app after initialization, reusing the default app."""
+    if not _firebase_initialized:
+        configured_credentials = any(
+            os.getenv(name) or getattr(settings, name, None)
+            for name in (
+                'FIREBASE_SERVICE_ACCOUNT_KEY',
+                'FIREBASE_SERVICE_ACCOUNT_JSON',
+                'GOOGLE_APPLICATION_CREDENTIALS',
+            )
+        )
+        if not configured_credentials and os.getenv('FIREBASE_USE_ADC', '').lower() != 'true':
+            return None
+        return init_firebase_admin()
+
+    try:
+        import firebase_admin
+        return firebase_admin.get_app()
+    except (ImportError, ValueError):
+        # FCM calls can still be mocked in tests where initialization is mocked.
+        return None
 
 
 def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
@@ -262,9 +281,9 @@ def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", ses
         logger.info(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=recipient_missing_or_self caller_id={caller_id} receiver_id={recipient_id}")
         return None
 
-    fb_app = init_firebase_admin()
-    if not fb_app:
-        logger.warning(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=firebase_not_initialized receiver={recipient_id}")
+    fb_app = _get_initialized_firebase_app()
+    if not _firebase_initialized:
+        logger.info(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=firebase_not_initialized receiver={recipient_id}")
         return None
 
     caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
@@ -416,9 +435,9 @@ def send_general_push_notification(user, title, body, extra_data=None):
         logger.info(f"[FCM] Push skipped for user {user.id}: disabled in preferences")
         return None
 
-    fb_app = init_firebase_admin()
-    if not fb_app:
-        logger.warning(f"[FCM] Push skipped for user {user.id}: Firebase not initialized")
+    fb_app = _get_initialized_firebase_app()
+    if not _firebase_initialized:
+        logger.info(f"[FCM] Push skipped for user {user.id}: Firebase not initialized")
         return None
 
     raw_tokens = list(

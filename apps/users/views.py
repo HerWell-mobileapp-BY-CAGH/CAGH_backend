@@ -30,10 +30,11 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from django.utils import timezone
 
-from rest_framework import generics, permissions, status, viewsets
+from rest_framework import filters, generics, permissions, status, viewsets
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.views import APIView
+from django_filters.rest_framework import DjangoFilterBackend
 
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError, InvalidToken
@@ -55,13 +56,16 @@ from .serializers import (
     PasswordResetOTPConfirmSerializer,
 )
 from .models import Profile, EmergencyContact, SOSLog, UserPreference, OTPVerification
+from .permissions import IsAdmin
 from .user_serializers import (
+    AdminUserCreateSerializer,
     UserSerializer,
     ProfileSerializer,
     EmergencyContactSerializer,
     SOSLogSerializer,
     UserPreferenceSerializer,
 )
+from .permissions import IsAdmin
 
 User = get_user_model()
 
@@ -130,22 +134,70 @@ class UserRegistrationView(generics.CreateAPIView):
 
         tokens = _token_pair_for(user)
 
-        return Response(
-            {
-                "message": "Account created successfully.",
-                "user": {
-                    "id": str(user.id),
-                    "first_name": user.first_name or (user.profile.first_name if hasattr(user, 'profile') else ""),
-                    "last_name": user.last_name or (user.profile.last_name if hasattr(user, 'profile') else ""),
-                    "username": user.username,
-                    "email": user.email,
-                    "role": user.role,
-                    "phone_number": user.phone_number,
-                },
-                **tokens,
+        payload = {
+            "message": "Account created successfully.",
+            "user": {
+                "id": str(user.id),
+                "first_name": user.first_name or user.profile.first_name,
+                "last_name": user.last_name or user.profile.last_name,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role,
+                "phone_number": user.phone_number,
             },
-            status=status.HTTP_201_CREATED,
-        )
+            **tokens,
+        }
+
+        if user.role == User.Role.MIDWIFE:
+            payload["message"] = (
+                "Midwife account registered successfully. Your application is pending admin approval. "
+                "You can sign in and complete your profile, but you will not appear to patients "
+                "or accept bookings until an administrator approves your credentials."
+            )
+            payload["requires_admin_approval"] = True
+
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class AdminUserListCreateView(generics.ListCreateAPIView):
+    """List and provision user accounts for the administrator portal."""
+
+    permission_classes = [IsAdmin]
+    filterset_fields = ("role", "is_active")
+    search_fields = ("username", "email", "phone_number", "profile__first_name", "profile__last_name")
+    ordering_fields = ("username", "email", "role", "date_joined")
+    ordering = ("-date_joined",)
+    filter_backends = (DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter)
+
+    def get_queryset(self):
+        return User.objects.select_related("profile", "preferences", "midwife_profile__hospital").all()
+
+    def get_serializer_class(self):
+        return AdminUserCreateSerializer if self.request.method == "POST" else UserSerializer
+
+    @extend_schema(
+        summary="List all users",
+        description="Admin-only paginated user list. Supports `search`, `ordering`, `role`, and `is_active` query parameters.",
+        tags=["Admin"],
+    )
+    def get(self, request, *args, **kwargs):
+        return self.list(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Create a user",
+        description="Admin-only user provisioning. Creates the user profile and preferences automatically.",
+        tags=["Admin"],
+    )
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        payload = UserSerializer(user, context=self.get_serializer_context()).data
+        # Generated credentials are displayed once here and never in user lists.
+        if serializer.temporary_password:
+            payload["temporary_password"] = serializer.temporary_password
+            payload["must_change_password"] = True
+        return Response(payload, status=status.HTTP_201_CREATED)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +389,7 @@ class OTPLoginView(APIView):
                 defaults={
                     "verification_status": MidwifeProfile.VerificationStatus.PENDING,
                     "license_number": f"LIC-{user.id.hex[:8].upper()}",
+                    "is_accepting_bookings": False,
                 }
             )
 
@@ -428,6 +481,7 @@ class PasswordChangeView(APIView):
 
         user = request.user
         user.set_password(serializer.validated_data["new_password"])
+        user.must_change_password = False
         user.save()
 
         tokens = _token_pair_for(user)
@@ -436,6 +490,26 @@ class PasswordChangeView(APIView):
             {"message": "Password changed successfully.", **tokens},
             status=status.HTTP_200_OK,
         )
+
+
+class AdminPasswordChangeView(PasswordChangeView):
+    """Change the password of the authenticated administrator."""
+
+    permission_classes = [IsAdmin]
+
+    @extend_schema(
+        summary="Change authenticated administrator password",
+        request=PasswordChangeSerializer,
+        responses={
+            200: OpenApiResponse(description="Password changed. New tokens issued."),
+            400: OpenApiResponse(description="Validation error"),
+            401: OpenApiResponse(description="Authentication credentials were not provided."),
+            403: OpenApiResponse(description="Administrator access is required."),
+        },
+        tags=["Admin Authentication"],
+    )
+    def post(self, request):
+        return super().post(request)
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +586,7 @@ class PasswordResetConfirmView(APIView):
 
         user = serializer.validated_data["user"]
         user.set_password(serializer.validated_data["new_password"])
+        user.must_change_password = False
         user.save()
 
         return Response(
@@ -614,6 +689,7 @@ class PasswordResetOTPConfirmView(APIView):
         otp_record = serializer.validated_data["otp_record"]
 
         user.set_password(serializer.validated_data["new_password"])
+        user.must_change_password = False
         user.save()
 
         otp_record.is_verified = True

@@ -1,12 +1,17 @@
 from django.urls import reverse
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
-from apps.midwives.models import MidwifeProfile, Hospital, Qualification, BlockedDate
+from django.core.files.uploadedfile import SimpleUploadedFile
+from rest_framework_simplejwt.tokens import RefreshToken
+from apps.midwives.models import MidwifeProfile, Hospital, Qualification, Certificate, BlockedDate
+from apps.notifications.models import Notification
 
 User = get_user_model()
 
 
+@override_settings(SECURE_SSL_REDIRECT=False)
 class MidwifeManagementTestCase(APITestCase):
 
     def setUp(self):
@@ -72,11 +77,50 @@ class MidwifeManagementTestCase(APITestCase):
         self.midwife_profile.refresh_from_db()
         self.assertEqual(self.midwife_profile.verification_status, "APPROVED")
 
-        # Suspend
-        suspend_res = self.client.post(url, {"action": "SUSPEND"}, format="json")
+        # Suspend (requires reason)
+        suspend_res = self.client.post(
+            url,
+            {"action": "SUSPEND", "reason": "License verification failed during audit."},
+            format="json",
+        )
         self.assertEqual(suspend_res.status_code, status.HTTP_200_OK)
         self.midwife_profile.refresh_from_db()
         self.assertEqual(self.midwife_profile.verification_status, "SUSPENDED")
+        self.assertIn("audit", self.midwife_profile.suspension_reason)
+
+    def test_admin_can_complete_missing_application_credentials(self):
+        """Admin can supply a CV and professional fields omitted at sign-up."""
+        self.client.force_authenticate(user=self.admin)
+        application = MidwifeProfile.objects.create(
+            user=User.objects.create_user(
+                username="incomplete_midwife",
+                email="incomplete-midwife@example.com",
+                password="MidwifePassword123!",
+                role="MIDWIFE",
+            ),
+            license_number=None,
+            hospital=None,
+            bio="",
+            experience_years=0,
+        )
+        response = self.client.patch(
+            reverse("midwife-application-detail", kwargs={"pk": application.id}),
+            {
+                "license_number": "MW-MANUAL-001",
+                "hospital_id": str(self.hospital.id),
+                "bio": "Administrator-completed profile.",
+                "experience_years": 4,
+                "cv_file": SimpleUploadedFile("cv.pdf", b"test CV", content_type="application/pdf"),
+            },
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        application.refresh_from_db()
+        self.assertEqual(application.license_number, "MW-MANUAL-001")
+        self.assertEqual(application.hospital, self.hospital)
+        self.assertEqual(application.experience_years, 4)
+        # Storage may add a suffix when a previous test file has the same name.
+        self.assertTrue(application.cv_file.name)
 
     def test_midwife_dashboard(self):
         self.client.force_authenticate(user=self.midwife_user)
@@ -149,3 +193,214 @@ class MidwifeManagementTestCase(APITestCase):
         results_fav = search_fav.data.get("results", search_fav.data)
         self.assertEqual(len(results_fav), 1)
         self.assertTrue(results_fav[0]["is_favorite"])
+
+
+class MidwifeAuthenticationWorkflowTestCase(APITestCase):
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            username="review_admin",
+            email="review-admin@example.com",
+            password="AdminPassword123!",
+            role="ADMIN",
+        )
+        self.midwife_user = User.objects.create_user(
+            username="pending_midwife",
+            email="pending@example.com",
+            password="MidwifePassword123!",
+            role="MIDWIFE",
+        )
+        self.hospital = Hospital.objects.create(
+            name="Tikur Anbessa",
+            address="Addis Ababa",
+            phone="+251111223344",
+        )
+        self.profile = MidwifeProfile.objects.create(
+            user=self.midwife_user,
+            hospital=self.hospital,
+            license_number="MW-123456",
+            experience_years=8,
+            bio="Certified midwife with 8 years of experience.",
+            languages="English, Amharic",
+            cv_file="midwives/cvs/sample_cv.pdf",
+            verification_status=MidwifeProfile.VerificationStatus.PENDING,
+        )
+        Qualification.objects.create(
+            midwife=self.profile,
+            title="BSc Midwifery",
+            institution="Addis Ababa University",
+            year_obtained=2016,
+        )
+        Certificate.objects.create(
+            midwife=self.profile,
+            title="Midwifery License",
+            document_file="midwives/certificates/license.pdf",
+        )
+
+    def test_admin_can_list_pending_applications_with_full_details(self):
+        self.client.force_authenticate(user=self.admin)
+        url = reverse("midwife-applications-list")
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data.get("results", response.data)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["license_number"], "MW-123456")
+        self.assertEqual(len(results[0]["qualifications"]), 1)
+        self.assertEqual(len(results[0]["certificates"]), 1)
+        self.assertIn("user", results[0])
+
+    def test_admin_can_fetch_single_application_detail(self):
+        self.client.force_authenticate(user=self.admin)
+        url = reverse("midwife-application-detail", kwargs={"pk": self.profile.id})
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["verification_status"], "PENDING")
+        self.assertEqual(response.data["user"]["email"], "pending@example.com")
+
+    def test_admin_can_approve_application(self):
+        self.client.force_authenticate(user=self.admin)
+        url = reverse("midwife-application-review", kwargs={"pk": self.profile.id})
+        response = self.client.post(url, {"action": "APPROVE"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], "APPROVED")
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.verification_status, "APPROVED")
+        self.assertEqual(self.profile.verified_by, self.admin)
+        self.assertTrue(
+            Notification.objects.filter(
+                user=self.midwife_user,
+                action="MIDWIFE_REVIEW",
+            ).exists()
+        )
+
+    def test_admin_reject_requires_reason(self):
+        self.client.force_authenticate(user=self.admin)
+        url = reverse("midwife-application-review", kwargs={"pk": self.profile.id})
+
+        missing_reason = self.client.post(url, {"action": "REJECT"}, format="json")
+        self.assertEqual(missing_reason.status_code, status.HTTP_400_BAD_REQUEST)
+
+        rejected = self.client.post(
+            url,
+            {
+                "action": "REJECT",
+                "reason": "Uploaded license document is expired and cannot be verified.",
+            },
+            format="json",
+        )
+        self.assertEqual(rejected.status_code, status.HTTP_200_OK)
+        self.assertEqual(rejected.data["status"], "REJECTED")
+        self.profile.refresh_from_db()
+        self.assertEqual(self.profile.verification_status, "REJECTED")
+        self.assertIn("expired", self.profile.rejection_reason)
+
+    def test_pending_midwife_can_login_but_is_not_patient_visible(self):
+        login_url = reverse("auth-login")
+        allowed = self.client.post(
+            login_url,
+            {"email": "pending@example.com", "password": "MidwifePassword123!", "role": "MIDWIFE"},
+            format="json",
+        )
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+        self.assertIn("access", allowed.data)
+        self.assertEqual(
+            allowed.data["user"]["midwife_profile"]["verification_status"],
+            "PENDING",
+        )
+
+        # Patients must not see pending midwives in the directory
+        self.client.force_authenticate(user=None)
+        patient = User.objects.create_user(
+            username="patient_viewer",
+            email="viewer@example.com",
+            password="PatientPassword123!",
+            role="PATIENT",
+        )
+        self.client.force_authenticate(user=patient)
+        list_url = reverse("midwife-profile-list")
+        listed = self.client.get(list_url)
+        results = listed.data.get("results", listed.data)
+        self.assertEqual(len(results), 0)
+
+    def test_rejected_midwife_can_login_and_sees_rejection_reason(self):
+        self.profile.verification_status = MidwifeProfile.VerificationStatus.REJECTED
+        self.profile.rejection_reason = "Invalid license number."
+        self.profile.save()
+
+        login_url = reverse("auth-login")
+        response = self.client.post(
+            login_url,
+            {"email": "pending@example.com", "password": "MidwifePassword123!", "role": "MIDWIFE"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["user"]["midwife_profile"]["rejection_reason"],
+            "Invalid license number.",
+        )
+
+    def test_non_admin_cannot_review_applications(self):
+        self.client.force_authenticate(user=self.midwife_user)
+        url = reverse("midwife-application-review", kwargs={"pk": self.profile.id})
+        response = self.client.post(url, {"action": "APPROVE"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_suspended_midwife_can_login_and_sees_suspension_reason(self):
+        self.profile.verification_status = MidwifeProfile.VerificationStatus.APPROVED
+        self.profile.save()
+
+        self.client.force_authenticate(user=self.admin)
+        review_url = reverse("midwife-application-review", kwargs={"pk": self.profile.id})
+        self.client.post(
+            review_url,
+            {"action": "SUSPEND", "reason": "Repeated no-shows for scheduled appointments."},
+            format="json",
+        )
+
+        login_url = reverse("auth-login")
+        response = self.client.post(
+            login_url,
+            {"email": "pending@example.com", "password": "MidwifePassword123!", "role": "MIDWIFE"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(
+            "Repeated no-shows",
+            response.data["user"]["midwife_profile"]["suspension_reason"],
+        )
+
+    def test_suspend_requires_reason(self):
+        self.profile.verification_status = MidwifeProfile.VerificationStatus.APPROVED
+        self.profile.save()
+        self.client.force_authenticate(user=self.admin)
+        url = reverse("midwife-application-review", kwargs={"pk": self.profile.id})
+        response = self.client.post(url, {"action": "SUSPEND"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_pending_midwife_can_access_dashboard(self):
+        refresh = RefreshToken.for_user(self.midwife_user)
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+        dashboard_url = reverse("midwife-dashboard")
+        allowed = self.client.get(dashboard_url)
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+        self.assertEqual(allowed.data["verification_status"], "PENDING")
+
+    def test_midwife_registration_issues_tokens_with_pending_status(self):
+        register_url = reverse("auth-register")
+        register_res = self.client.post(
+            register_url,
+            {
+                "email": "new-midwife@example.com",
+                "password": "MidwifePassword123!",
+                "password_confirm": "MidwifePassword123!",
+                "role": "MIDWIFE",
+            },
+            format="json",
+        )
+        self.assertEqual(register_res.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(register_res.data.get("requires_admin_approval"))
+        self.assertIn("access", register_res.data)
+        self.assertIn("refresh", register_res.data)

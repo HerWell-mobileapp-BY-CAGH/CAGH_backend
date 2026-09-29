@@ -46,6 +46,7 @@ class AppointmentManagementTestCase(APITestCase):
             hospital=self.hospital,
             license_number="MW-APT-100",
             verification_status="APPROVED",
+            is_accepting_bookings=True,
             offered_consultation_types=["IN_PERSON", "VIRTUAL_VOICE"],
         )
 
