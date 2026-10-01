@@ -6,7 +6,7 @@ API so views stay thin and the React dashboard can consume one stable payload.
 """
 
 from django.contrib.auth import get_user_model
-from django.db.models import Count
+from django.db.models import Count, Q
 
 from apps.appointments.models import Appointment
 from apps.consultations.models import Consultation
@@ -38,6 +38,20 @@ def _counts_by_status(queryset, status_field: str) -> dict[str, int]:
     return counts
 
 
+def _total_and_counts_by_status(queryset, status_field: str) -> tuple[int, dict[str, int]]:
+    """Fetch a table total and its status breakdown with one aggregate query."""
+    status_counts = {
+        f"status_{index}": Count("id", filter=Q(**{status_field: value}))
+        for index, (value, _) in enumerate(queryset.model._meta.get_field(status_field).choices)
+    }
+    result = queryset.aggregate(total=Count("id"), **status_counts)
+    counts = {
+        value: result[f"status_{index}"]
+        for index, (value, _) in enumerate(queryset.model._meta.get_field(status_field).choices)
+    }
+    return result["total"], counts
+
+
 def build_admin_dashboard_payload(*, recent_activity_limit: int = DEFAULT_RECENT_ACTIVITY_LIMIT) -> dict:
     """
     Compose the full admin dashboard statistics payload.
@@ -49,30 +63,24 @@ def build_admin_dashboard_payload(*, recent_activity_limit: int = DEFAULT_RECENT
     total_users = User.objects.count()
     # Use profile rows because appointments and consultations point to a profile,
     # rather than directly to a user account.
-    total_midwives = MidwifeProfile.objects.count()
-
     # --- Midwife verification breakdown --------------------------------------
-    midwives_by_status = _counts_by_status(
-        MidwifeProfile.objects.all(),
-        "verification_status",
+    total_midwives, midwives_by_status = _total_and_counts_by_status(
+        MidwifeProfile.objects.all(), "verification_status"
     )
     # Ensure every verification state appears in the response for charting.
     for status_value, _ in MidwifeProfile.VerificationStatus.choices:
         midwives_by_status.setdefault(status_value, 0)
 
     # --- Consultation totals -------------------------------------------------
-    total_consultations = Consultation.objects.count()
-    consultations_by_status = _counts_by_status(
-        Consultation.objects.all(),
-        "status",
+    total_consultations, consultations_by_status = _total_and_counts_by_status(
+        Consultation.objects.all(), "status"
     )
     for status_value, _ in Consultation.ConsultationStatus.choices:
         consultations_by_status.setdefault(status_value, 0)
 
     # --- Appointment totals --------------------------------------------------
-    appointments_by_status = _counts_by_status(
-        Appointment.objects.all(),
-        "status",
+    _, appointments_by_status = _total_and_counts_by_status(
+        Appointment.objects.all(), "status"
     )
     for status_value, _ in Appointment.AppointmentStatus.choices:
         appointments_by_status.setdefault(status_value, 0)

@@ -24,5 +24,7 @@ COPY . /app/
 # Expose port
 EXPOSE 8000
 
-# Default command to run migrations, reset admin, collect static files, then launch ASGI application via Daphne
-CMD ["sh", "-c", "python manage.py migrate && python manage.py reset_admin && python manage.py seed_facilities && python manage.py collectstatic --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"]
+# Admin provisioning can be triggered on a single deploy by setting
+# ADMIN_RESET_ON_START=true with ADMIN_USERNAME, ADMIN_EMAIL, and ADMIN_PASSWORD.
+# Remove ADMIN_RESET_ON_START immediately after that deploy to prevent later resets.
+CMD ["sh", "-c", "python manage.py migrate && if [ \"$ADMIN_RESET_ON_START\" = \"true\" ]; then python manage.py reset_admin || exit $?; fi && python manage.py seed_facilities && python manage.py collectstatic --noinput && daphne -b 0.0.0.0 -p 8000 config.asgi:application"]

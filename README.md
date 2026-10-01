@@ -67,6 +67,12 @@ docker compose exec web python manage.py migrate
 docker compose exec web python manage.py createsuperuser
 ```
 
+### Provision an administrator on Render
+
+Render uses its own database, so a superuser created locally is not present there. Free web services don't provide Shell access or one-off jobs. To provision/reset the administrator, temporarily set `ADMIN_USERNAME`, `ADMIN_EMAIL`, a strong `ADMIN_PASSWORD`, and `ADMIN_RESET_ON_START=true` in the Render service environment, then deploy. The container runs `python manage.py reset_admin` once during startup. After that deploy succeeds, remove `ADMIN_RESET_ON_START` and deploy again; otherwise every service restart will reset the password to the configured `ADMIN_PASSWORD`.
+
+The administrator dashboard token endpoint is `POST /api/v1/auth/admin/login/`; the normal user endpoint is `POST /api/v1/auth/login/`.
+
 
 ---
 
