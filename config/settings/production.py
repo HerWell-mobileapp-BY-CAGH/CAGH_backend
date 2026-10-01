@@ -13,7 +13,7 @@ CSRF_COOKIE_SECURE = True
 # Production database standard setup
 import dj_database_url
 if os.environ.get('DATABASE_URL'):
-    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 60)))
     DATABASES['default'] = dj_database_url.config(
         conn_max_age=conn_max_age,
         conn_health_checks=True,

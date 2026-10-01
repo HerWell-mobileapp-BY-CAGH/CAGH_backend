@@ -126,7 +126,8 @@ if 'test' in sys.argv:
         }
     }
 elif os.environ.get('DATABASE_URL'):
-    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
+    # Reuse database connections across requests to avoid connection setup latency.
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 60)))
     DATABASES = {
         'default': dj_database_url.config(
             conn_max_age=conn_max_age,
@@ -149,7 +150,8 @@ else:
     DB_HOST = os.environ.get('POSTGRES_HOST', 'localhost')
     DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
 
-    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
+    # Reuse database connections across requests to avoid connection setup latency.
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 60)))
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
