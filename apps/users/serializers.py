@@ -136,7 +136,15 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     def validate_phone_number(self, value):
         if value:
-            value = value.strip()
+            from apps.common.phone_utils import normalize_ethiopian_phone
+            norm = normalize_ethiopian_phone(value)
+            if norm["is_valid"]:
+                value = norm["phone_number"]
+            elif norm.get("is_ethiopian"):
+                raise serializers.ValidationError(norm["error"])
+            else:
+                value = value.strip()
+
             if User.objects.filter(phone_number__iexact=value).exists():
                 raise serializers.ValidationError("A user with this phone number already exists.")
         return value or None

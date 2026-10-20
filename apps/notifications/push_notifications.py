@@ -2,9 +2,8 @@ import os
 import json
 import base64
 import logging
-import time
 from django.conf import settings
-from .models import Notification, DeviceToken
+from .models import DeviceToken
 
 logger = logging.getLogger(__name__)
 
@@ -267,158 +266,6 @@ def _get_initialized_firebase_app():
         return None
 
 
-def send_call_offer_push(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
-    """
-    Sends a DATA-ONLY high-priority FCM call offer push notification to ring the recipient device.
-    Strictly data-only (no 'notification' payload block) with android.priority='high' and APNS content_available=True.
-    Guarantees background/killed app state handlers can launch full-screen incoming call UI.
-    Does NOT corrupt call state if Firebase is unavailable or fails.
-    """
-    caller_id = str(getattr(caller, 'id', ''))
-    recipient_id = str(getattr(recipient, 'id', ''))
-
-    if not recipient or not recipient_id or caller_id == recipient_id:
-        logger.info(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=recipient_missing_or_self caller_id={caller_id} receiver_id={recipient_id}")
-        return None
-
-    fb_app = _get_initialized_firebase_app()
-    if not _firebase_initialized:
-        logger.info(f"[CALL] call_id={session_key} event=FCM_SKIPPED reason=firebase_not_initialized receiver={recipient_id}")
-        return None
-
-    caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
-    recipient_name = getattr(recipient, 'get_full_name', lambda: '')() or getattr(recipient, 'username', '') or "Recipient"
-    call_id_str = session_key or str(consultation.id)
-
-    call_payload = {
-        "type": "incoming_call",
-        "action": "INCOMING_CALL",
-        "consultation_id": str(consultation.id),
-        "call_id": call_id_str,
-        "session_id": call_id_str,
-        "session_key": call_id_str,
-        "call_type": str(call_type),
-        "caller_id": caller_id,
-        "caller_name": caller_name,
-        "caller_role": str(getattr(caller, 'role', 'PATIENT')),
-        "receiver_id": recipient_id,
-        "recipient_id": recipient_id,
-        "receiver_name": recipient_name,
-        "recipient_name": recipient_name,
-        "timestamp": str(int(time.time())),
-        "webrtc_enabled": "true",
-    }
-
-    raw_tokens = list(
-        DeviceToken.objects.filter(user=recipient, is_active=True).values_list('token', flat=True)
-    )
-    tokens = list(dict.fromkeys([t.strip() for t in raw_tokens if t and t.strip()]))
-
-    if not tokens:
-        logger.info(f"[CALL] call_id={session_key} event=FCM_NO_TOKENS receiver={recipient_id}")
-        return None
-
-    logger.info(f"[CALL] call_id={session_key} event=FCM_DISPATCHING caller={caller_id} receiver={recipient_id} token_count={len(tokens)}")
-
-    try:
-        from firebase_admin import messaging
-        str_payload = {k: str(v) for k, v in call_payload.items()}
-        message = messaging.MulticastMessage(
-            tokens=tokens,
-            data=str_payload,  # DATA-ONLY: No notification= block!
-            android=messaging.AndroidConfig(
-                priority='high',
-                ttl=30,
-            ),
-            apns=messaging.APNSConfig(
-                headers={
-                    'apns-priority': '10',
-                    'apns-push-type': 'background',
-                },
-                payload=messaging.APNSPayload(
-                    aps=messaging.Aps(
-                        content_available=True,
-                    ),
-                ),
-            ),
-        )
-
-        if hasattr(messaging, 'send_each_for_multicast'):
-            response = messaging.send_each_for_multicast(message, app=fb_app)
-        else:
-            response = messaging.send_multicast(message, app=fb_app)
-
-        if response.failure_count > 0 and response.success_count > 0:
-            logger.info(f"[CALL] call_id={session_key} event=FCM_PARTIAL_FAILURE receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
-        elif response.failure_count > 0 and response.success_count == 0:
-            logger.error(f"[CALL] call_id={session_key} event=FCM_FAILED receiver={recipient_id} success_count=0 failure_count={response.failure_count}")
-        else:
-            logger.info(f"[CALL] call_id={session_key} event=FCM_SENT receiver={recipient_id} success_count={response.success_count} failure_count={response.failure_count}")
-
-        if response.failure_count > 0:
-            for idx, resp in enumerate(response.responses):
-                if not resp.success:
-                    exc = resp.exception
-                    err_code = getattr(exc, 'code', None) or getattr(exc, 'error_code', None) or type(exc).__name__ if exc else "UNKNOWN_ERROR"
-                    err_msg = str(exc) if exc else "No exception detail"
-
-                    logger.error(
-                        f"[CALL] call_id={session_key} event=FCM_TOKEN_FAILED receiver={recipient_id} "
-                        f"index={idx} code={err_code} message={err_msg}"
-                    )
-
-                    err_str = f"{err_code} {err_msg}".lower()
-                    if any(pattern in err_str for pattern in ['unregistered', 'invalid_argument', 'invalid-argument', 'not_found', 'not-found', 'sender_id_mismatch', 'sender-id-mismatch']):
-                        stale_token = tokens[idx]
-                        DeviceToken.objects.filter(token=stale_token).update(is_active=False)
-                        logger.info(f"[CALL] call_id={session_key} event=FCM_TOKEN_DEACTIVATED receiver={recipient_id} index={idx} code={err_code}")
-
-        return response
-    except Exception as fe:
-        logger.error(f"[CALL] call_id={session_key} event=FCM_FAILED receiver={recipient_id} error={fe}")
-        return None
-
-
-def send_incoming_call_notification(caller, recipient, consultation, call_type="VOICE", session_key=None, agora_channel_name=None, agora_app_id=None):
-    """
-    Triggers an in-app Notification record and high-priority FCM call offer push notification.
-    Strictly prevents self-calling (caller == recipient).
-    """
-    caller_id = str(getattr(caller, 'id', ''))
-    recipient_id = str(getattr(recipient, 'id', ''))
-
-    if not recipient or not recipient_id or caller_id == recipient_id:
-        logger.info(f"[CALL] call_id={session_key} event=CALL_NOTIFICATION_SKIPPED reason=self_call_or_missing_recipient caller_id={caller_id}")
-        return None
-
-    caller_name = getattr(caller, 'get_full_name', lambda: '')() or getattr(caller, 'username', '') or "Healthcare Provider"
-
-    title = f"Incoming {call_type.title()} Call"
-    body = f"{caller_name} is calling you for your scheduled consultation."
-
-    # 1. Create In-App Notification
-    notification = Notification.objects.create(
-        user=recipient,
-        title=title,
-        body=body,
-        type="CONSULTATION",
-        action="INCOMING_CALL",
-        reference_id=str(consultation.id),
-    )
-
-    # 2. Trigger DATA-ONLY FCM Call Offer Push
-    send_call_offer_push(
-        caller=caller,
-        recipient=recipient,
-        consultation=consultation,
-        call_type=call_type,
-        session_key=session_key,
-        agora_channel_name=agora_channel_name,
-        agora_app_id=agora_app_id,
-    )
-
-    return notification
-
 
 def send_general_push_notification(user, title, body, extra_data=None):
     """
@@ -502,5 +349,3 @@ def send_general_push_notification(user, title, body, extra_data=None):
     except Exception as exc:
         logger.error(f"[FCM] General push notification error for user {user.id}: {exc}")
         return None
-
-

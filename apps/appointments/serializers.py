@@ -140,6 +140,7 @@ class TimeSlotSerializer(serializers.ModelSerializer):
 class AppointmentSerializer(serializers.ModelSerializer):
     user_detail = UserSerializer(source='user', read_only=True)
     midwife_detail = MidwifeProfileSerializer(source='midwife', read_only=True)
+    call_eligibility = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Appointment
@@ -147,6 +148,14 @@ class AppointmentSerializer(serializers.ModelSerializer):
         read_only_fields = (
             'id', 'appointment_number', 'user', 'created_by', 'created_at', 'updated_at'
         )
+
+    def get_call_eligibility(self, obj):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+        if not user or not user.is_authenticated:
+            return None
+        from apps.appointments.call_service import AppointmentCallService
+        return AppointmentCallService.check_call_eligibility(obj, user, request=request)
 
     def to_internal_value(self, data):
         if hasattr(data, 'dict'):

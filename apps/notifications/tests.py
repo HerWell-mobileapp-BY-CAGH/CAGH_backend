@@ -90,62 +90,26 @@ class NotificationsTestCase(APITestCase):
         self.assertEqual(put_res.status_code, status.HTTP_200_OK)
         self.assertFalse(put_res.data["system_announcements"])
 
-    def test_send_call_offer_push_data_only(self):
-        import uuid
+    def test_send_general_push_notification(self):
         from unittest.mock import patch
-        from apps.notifications.call_notifications import send_call_offer_push
-        caller = User.objects.create_user(username="caller_doc", password="Password123!")
+        from apps.notifications.push_notifications import send_general_push_notification
         DeviceToken.objects.create(user=self.user, token="fcm_token_test_123", platform="ANDROID")
 
-        class StubConsultation:
-            id = uuid.uuid4()
-
-        with patch("apps.notifications.call_notifications._firebase_initialized", True), \
+        with patch("apps.notifications.push_notifications._firebase_initialized", True), \
              patch("firebase_admin.messaging.send_each_for_multicast") as mock_send:
             mock_send.return_value.success_count = 1
             mock_send.return_value.failure_count = 0
             mock_send.return_value.responses = []
 
-            result = send_call_offer_push(
-                caller=caller,
-                recipient=self.user,
-                consultation=StubConsultation(),
-                call_type="VOICE",
-                session_key="VOICE-TEST-KEY",
-                agora_channel_name="cagh_test_voice_channel",
+            result = send_general_push_notification(
+                user=self.user,
+                title="Test Title",
+                body="Test Message Body",
+                extra_data={"type": "CHAT", "room_id": "test-room-123"},
             )
-        self.assertEqual(DeviceToken.objects.filter(user=self.user, is_active=True).count(), 1)
-
-    def test_send_call_offer_push_includes_receiver_identity(self):
-        import uuid
-        from unittest.mock import patch
-        from apps.notifications.call_notifications import send_call_offer_push
-        caller = User.objects.create_user(username="caller_doc2", password="Password123!")
-        DeviceToken.objects.create(user=self.user, token="fcm_token_test_456", platform="ANDROID")
-
-        class StubConsultation:
-            id = uuid.uuid4()
-
-        with patch("apps.notifications.call_notifications._firebase_initialized", True), \
-             patch("firebase_admin.messaging.send_each_for_multicast") as mock_send:
-            mock_send.return_value.success_count = 1
-            mock_send.return_value.failure_count = 0
-            mock_send.return_value.responses = []
-
-            send_call_offer_push(
-                caller=caller,
-                recipient=self.user,
-                consultation=StubConsultation(),
-                call_type="VOICE",
-                session_key="VOICE-TEST-KEY2",
-            )
-
             self.assertTrue(mock_send.called)
             sent_message = mock_send.call_args[0][0]
-            self.assertIn('receiver_id', sent_message.data)
-            self.assertEqual(sent_message.data['receiver_id'], str(self.user.id))
-            self.assertIn('recipient_id', sent_message.data)
-            self.assertEqual(sent_message.data['recipient_id'], str(self.user.id))
-            self.assertIn('receiver_name', sent_message.data)
-            self.assertIn('recipient_name', sent_message.data)
+            self.assertEqual(sent_message.data["type"], "CHAT")
+            self.assertEqual(sent_message.data["room_id"], "test-room-123")
+
 

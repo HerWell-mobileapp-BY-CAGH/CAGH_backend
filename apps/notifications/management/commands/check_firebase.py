@@ -2,7 +2,7 @@ import os
 import json
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from apps.notifications.call_notifications import init_firebase_admin
+from apps.notifications.push_notifications import init_firebase_admin
 
 
 class Command(BaseCommand):

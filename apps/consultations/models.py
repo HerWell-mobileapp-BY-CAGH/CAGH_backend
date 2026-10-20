@@ -106,7 +106,6 @@ class VoiceSession(models.Model):
         blank=True
     )
     session_key = models.CharField(max_length=255, unique=True)
-    agora_channel_name = models.CharField(max_length=255, unique=True, null=True, blank=True)
     status = models.CharField(max_length=20, choices=VoiceSessionStatus.choices, default=VoiceSessionStatus.INITIATED, db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)

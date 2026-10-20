@@ -119,7 +119,7 @@ class ConsultationManagementTestCase(APITestCase):
         self.confirmed_appointment.refresh_from_db()
         self.assertEqual(self.confirmed_appointment.status, "COMPLETED")
 
-    def test_voice_session_webrtc_lifecycle_endpoints(self):
+    def test_voice_session_lifecycle_endpoints(self):
         consultation = Consultation.objects.create(
             appointment=self.confirmed_appointment,
             user=self.patient,
@@ -134,19 +134,17 @@ class ConsultationManagementTestCase(APITestCase):
         res_start = self.client.post(start_url)
         self.assertEqual(res_start.status_code, status.HTTP_200_OK)
         self.assertEqual(res_start.data["status"], "RINGING")
-        self.assertIn("ice_servers", res_start.data)
 
         session = VoiceSession.objects.get(consultation=consultation)
         self.assertEqual(session.status, VoiceSession.VoiceSessionStatus.RINGING)
         self.assertEqual(session.caller, self.patient)
 
-        # 2. Recipient accepts call -> ACCEPTED + ICE servers
+        # 2. Recipient accepts call -> ACCEPTED
         self.client.force_authenticate(user=self.midwife_user)
         accept_url = reverse("consultation-voice-session-accept", kwargs={"pk": consultation.id})
         res_accept = self.client.post(accept_url)
         self.assertEqual(res_accept.status_code, status.HTTP_200_OK)
         self.assertEqual(res_accept.data["status"], "ACCEPTED")
-        self.assertIn("ice_servers", res_accept.data)
 
         # 3. Connect audio stream -> ONGOING
         connect_url = reverse("consultation-voice-session-connect", kwargs={"pk": consultation.id})
@@ -154,12 +152,12 @@ class ConsultationManagementTestCase(APITestCase):
         self.assertEqual(res_conn.status_code, status.HTTP_200_OK)
         self.assertEqual(res_conn.data["status"], "ONGOING")
 
-        # 4. Caller fetches WebRTC config for active call
+        # 4. Caller checks voice session status
         self.client.force_authenticate(user=self.patient)
-        token_url = reverse("consultation-voice-session-webrtc-config", kwargs={"pk": consultation.id})
-        res_token = self.client.get(token_url)
-        self.assertEqual(res_token.status_code, status.HTTP_200_OK)
-        self.assertIn("ice_servers", res_token.data)
+        status_url = reverse("consultation-manage-voice-session", kwargs={"pk": consultation.id})
+        res_status = self.client.get(status_url)
+        self.assertEqual(res_status.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_status.data["status"], "ONGOING")
 
         # 5. End call -> ENDED
         end_url = reverse("consultation-voice-session-end", kwargs={"pk": consultation.id})
@@ -225,16 +223,16 @@ class ConsultationManagementTestCase(APITestCase):
         res_decline = self.client.post(manage_url, {"action": "DECLINE"}, format="json")
         self.assertEqual(res_decline.status_code, status.HTTP_409_CONFLICT)
 
-        # 5. Verify accept ok returns ICE servers
+        # 5. Verify accept ok returns ACCEPTED status
         session = VoiceSession.objects.get(consultation=consultation)
         session.status = VoiceSession.VoiceSessionStatus.RINGING
         session.save()
 
         res_accept_ok = self.client.post(manage_url, {"action": "ACCEPT"}, format="json")
         self.assertEqual(res_accept_ok.status_code, status.HTTP_200_OK)
-        self.assertIn("ice_servers", res_accept_ok.data)
+        self.assertEqual(res_accept_ok.data["status"], "ACCEPTED")
 
-    def test_unauthorized_user_cannot_access_voice_call_webrtc_config(self):
+    def test_unauthorized_user_cannot_access_consultation_call_midwife(self):
         consultation = Consultation.objects.create(
             appointment=self.confirmed_appointment,
             user=self.patient,
@@ -243,14 +241,10 @@ class ConsultationManagementTestCase(APITestCase):
             status="SCHEDULED",
         )
 
-        self.client.force_authenticate(user=self.patient)
-        start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
-        self.client.post(start_url)
-
-        # Unassigned midwife attempts to fetch WebRTC config (Permission test)
+        # Unassigned midwife attempts to fetch call midwife details (Permission test)
         self.client.force_authenticate(user=self.other_midwife_user)
-        token_url = reverse("consultation-voice-session-webrtc-config", kwargs={"pk": consultation.id})
-        res_bad = self.client.get(token_url)
+        call_url = reverse("consultation-call-midwife", kwargs={"pk": consultation.id})
+        res_bad = self.client.get(call_url)
         self.assertEqual(res_bad.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_only_assigned_midwife_can_add_notes(self):
@@ -314,64 +308,3 @@ class ConsultationManagementTestCase(APITestCase):
         self.assertEqual(res.data["status"], "RINGING")
         self.assertIsNotNone(res.data["consultation"])
 
-    async def test_websocket_call_signaling(self):
-        from rest_framework_simplejwt.tokens import AccessToken
-        from channels.testing import WebsocketCommunicator
-        from config.asgi import application
-
-        consultation = await Consultation.objects.acreate(
-            appointment=self.confirmed_appointment,
-            user=self.patient,
-            midwife=self.midwife_profile,
-            consultation_type="VIRTUAL_VOICE",
-            status="ACTIVE",
-        )
-
-        patient_token = str(AccessToken.for_user(self.patient))
-        midwife_token = str(AccessToken.for_user(self.midwife_user))
-
-        patient_comm = WebsocketCommunicator(
-            application,
-            f"/ws/consultation/{consultation.id}/?token={patient_token}"
-        )
-        midwife_comm = WebsocketCommunicator(
-            application,
-            f"/ws/consultation/{consultation.id}/?token={midwife_token}"
-        )
-
-        connected_p, _ = await patient_comm.connect()
-        self.assertTrue(connected_p)
-
-        connected_m, _ = await midwife_comm.connect()
-        self.assertTrue(connected_m)
-
-        res_p_peer_joined = await patient_comm.receive_json_from()
-        self.assertEqual(res_p_peer_joined["type"], "peer_joined")
-
-        # 1. Patient sends incoming_call -> Midwife receives incoming_call
-        await patient_comm.send_json_to({
-            "action": "incoming_call",
-            "call_type": "VOICE"
-        })
-        res_offer = await midwife_comm.receive_json_from()
-        self.assertEqual(res_offer["type"], "incoming_call")
-        self.assertEqual(res_offer["call_type"], "VOICE")
-
-        # 2. Midwife sends call_accepted -> Patient receives call_accepted
-        await midwife_comm.send_json_to({
-            "action": "call_accepted"
-        })
-        res_answer = await patient_comm.receive_json_from()
-        self.assertEqual(res_answer["type"], "call_accepted")
-
-        # 3. Patient sends toggle_media -> Midwife receives media_state_changed
-        await patient_comm.send_json_to({
-            "action": "toggle_media",
-            "is_muted": True
-        })
-        res_media = await midwife_comm.receive_json_from()
-        self.assertEqual(res_media["type"], "media_state_changed")
-        self.assertTrue(res_media["is_muted"])
-
-        await patient_comm.disconnect()
-        await midwife_comm.disconnect()

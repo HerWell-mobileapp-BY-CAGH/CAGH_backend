@@ -397,9 +397,6 @@ if not DEBUG:
 # Google Maps API Key (Optional — used for dynamic Places API facility search)
 GOOGLE_MAPS_API_KEY = os.environ.get('GOOGLE_MAPS_API_KEY', '')
 
-# WebRTC ICE Configuration
-WEBRTC_STUN_SERVERS = json.loads(os.environ.get('WEBRTC_STUN_SERVERS', '["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"]'))
-WEBRTC_TURN_SERVERS = json.loads(os.environ.get('WEBRTC_TURN_SERVERS', '[]'))
 
 
 

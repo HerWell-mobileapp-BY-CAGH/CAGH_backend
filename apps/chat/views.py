@@ -10,7 +10,7 @@ from drf_spectacular.utils import extend_schema
 from .models import ChatRoom, Message, Attachment
 from .serializers import ChatRoomSerializer, MessageSerializer, AttachmentSerializer
 from apps.notifications.models import Notification
-from apps.notifications.call_notifications import send_general_push_notification
+from apps.notifications.push_notifications import send_general_push_notification
 
 
 class ChatRoomViewSet(viewsets.ModelViewSet):

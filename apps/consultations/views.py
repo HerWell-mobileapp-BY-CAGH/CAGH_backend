@@ -19,7 +19,7 @@ from .serializers import (
 from .services import VoiceCallService
 from apps.appointments.models import Appointment
 from apps.notifications.models import Notification
-from apps.notifications.call_notifications import send_incoming_call_notification
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,15 +49,6 @@ VoiceAcceptResponseSerializer = inline_serializer(
         'session_key': serializers.CharField(),
         'call_id': serializers.CharField(),
         'started_at': serializers.DateTimeField(),
-    }
-)
-
-VoiceTokenResponseSerializer = inline_serializer(
-    name='VoiceTokenResponse',
-    fields={
-        'session_key': serializers.CharField(),
-        'call_id': serializers.CharField(),
-        'status': serializers.CharField(),
     }
 )
 
@@ -95,7 +86,8 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         if self.action in [
             'retrieve', 'add_note', 'start', 'complete', 'manage_voice_session',
             'destroy', 'voice_session_accept', 'voice_session_connect', 'voice_session_decline',
-            'voice_session_cancel', 'voice_session_missed', 'voice_session_end', 'voice_session_token'
+            'voice_session_cancel', 'voice_session_missed', 'voice_session_end',
+            'call_midwife', 'call_midwife_alias', 'call_access', 'call_access_alias', 'call_eligibility', 'call_eligibility_alias'
         ]:
             return queryset
 
@@ -376,7 +368,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             raise
 
     @extend_schema(
-        summary="Accept Voice Call & Retrieve Signed Agora Token",
+        summary="Accept Voice Call",
         tags=["Consultations"],
         responses={200: VoiceAcceptResponseSerializer}
     )
@@ -385,7 +377,7 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         return self._execute_voice_action_logging(request, pk, 'ACCEPT', VoiceCallService.accept_call)
 
     @extend_schema(
-        summary="Mark Call ONGOING when WebRTC Media Connects",
+        summary="Mark Call ONGOING when Voice Session Connects",
         tags=["Consultations"],
         responses={200: VoiceStatusResponseSerializer}
     )
@@ -433,28 +425,6 @@ class ConsultationViewSet(viewsets.ModelViewSet):
     def voice_session_end(self, request, pk=None):
         return self._execute_voice_action_logging(request, pk, 'END', VoiceCallService.end_call)
 
-    @extend_schema(
-        summary="Get WebRTC ICE server configuration for active call",
-        tags=["Consultations"],
-        responses={200: VoiceTokenResponseSerializer}
-    )
-    @action(detail=True, methods=['get', 'post'], url_path='voice-session/webrtc-config')
-    def voice_session_webrtc_config(self, request, pk=None):
-        consultation = self.get_object()
-        data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
-        return Response(data, status=code)
-
-    @extend_schema(
-        summary="Get authorized WebRTC configuration for active call (Legacy alias)",
-        tags=["Consultations"],
-        responses={200: VoiceTokenResponseSerializer}
-    )
-    @action(detail=True, methods=['get', 'post'], url_path='voice-session/token')
-    def voice_session_token(self, request, pk=None):
-        consultation = self.get_object()
-        data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
-        return Response(data, status=code)
-
     @extend_schema(summary="Manage Virtual Voice Session status", tags=["Consultations"])
     @action(detail=True, methods=['get', 'post'], url_path='voice-session')
     def manage_voice_session(self, request, pk=None):
@@ -478,8 +448,12 @@ class ConsultationViewSet(viewsets.ModelViewSet):
             return Response(data, status=code)
         else:
             consultation = self.get_object()
-            data, code = VoiceCallService.get_webrtc_config(consultation, request.user)
-            return Response(data, status=code)
+            session = self._get_voice_session(consultation)
+            return Response({
+                'consultation_id': str(consultation.id),
+                'status': session.status if session else 'NONE',
+                'session_key': session.session_key if session else None,
+            }, status=status.HTTP_200_OK)
 
     @extend_schema(summary="Complete consultation & record diagnosis/summary", tags=["Consultations"])
     @action(detail=True, methods=['post'])
@@ -545,3 +519,49 @@ class ConsultationViewSet(viewsets.ModelViewSet):
         )
         serializer = ConsultationNoteSerializer(note)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(summary="Call Midwife: Check eligibility and retrieve dialer tel URI", tags=["Consultations"])
+    @action(detail=True, methods=['get', 'post'], url_path='call-midwife')
+    def call_midwife(self, request, pk=None):
+        consultation = self.get_object()
+        appointment = getattr(consultation, 'appointment', None)
+        if not appointment:
+            return Response(
+                {"error": "No appointment linked to this consultation record.", "can_call": False},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        from apps.appointments.call_service import AppointmentCallService
+        data = AppointmentCallService.check_call_eligibility(appointment, request.user, request=request)
+        data["consultation_id"] = str(consultation.id)
+
+        if not data["is_authorized"]:
+            return Response(
+                {"error": "You do not have permission to access call details for this consultation.", "detail": data["reason"]},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if request.method == 'POST' and not data["can_call"]:
+            return Response(data, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get', 'post'], url_path='call_midwife')
+    def call_midwife_alias(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get', 'post'], url_path='call-access')
+    def call_access(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get', 'post'], url_path='call_access')
+    def call_access_alias(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get'], url_path='call-eligibility')
+    def call_eligibility(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get'], url_path='call_eligibility')
+    def call_eligibility_alias(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)

@@ -10,7 +10,7 @@ from .models import Availability, TimeSlot, Appointment
 from .serializers import AvailabilitySerializer, TimeSlotSerializer, AppointmentSerializer
 from apps.midwives.models import MidwifeProfile
 from apps.notifications.models import Notification
-from apps.notifications.call_notifications import send_general_push_notification
+from apps.notifications.push_notifications import send_general_push_notification
 
 
 def _format_appointment_info(appointment):
@@ -500,4 +500,51 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         _notify_user_and_midwife(appointment, action_type="APPOINTMENT_COMPLETED")
 
         return Response({'status': 'COMPLETED', 'message': 'Appointment marked as completed.'}, status=status.HTTP_200_OK)
+
+    @extend_schema(summary="Call Midwife: Check eligibility and retrieve dialer tel URI", tags=["Appointments"])
+    @action(detail=True, methods=['get', 'post'], url_path='call-midwife')
+    def call_midwife(self, request, pk=None):
+        if not request.user or not request.user.is_authenticated:
+            return Response({"detail": "Authentication credentials were not provided."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        appointment = Appointment.objects.select_related(
+            'user', 'midwife', 'midwife__user', 'midwife__hospital'
+        ).filter(id=pk).first()
+
+        if not appointment:
+            return Response({"error": "Appointment not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        from apps.appointments.call_service import AppointmentCallService
+        data = AppointmentCallService.check_call_eligibility(appointment, request.user, request=request)
+
+        if not data["is_authorized"]:
+            return Response(
+                {"error": "You do not have permission to access call details for this appointment.", "detail": data["reason"]},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if request.method == 'POST' and not data["can_call"]:
+            return Response(data, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get', 'post'], url_path='call_midwife')
+    def call_midwife_alias(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get', 'post'], url_path='call-access')
+    def call_access(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get', 'post'], url_path='call_access')
+    def call_access_alias(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get'], url_path='call-eligibility')
+    def call_eligibility(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
+
+    @action(detail=True, methods=['get'], url_path='call_eligibility')
+    def call_eligibility_alias(self, request, pk=None):
+        return self.call_midwife(request, pk=pk)
 

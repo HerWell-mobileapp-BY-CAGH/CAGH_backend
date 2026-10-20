@@ -3,7 +3,7 @@ from django.utils import timezone
 from celery import shared_task
 from apps.appointments.models import Appointment
 from apps.notifications.models import Notification
-from apps.notifications.call_notifications import send_general_push_notification
+from apps.notifications.push_notifications import send_general_push_notification
 
 
 def _format_appointment_info(appointment):

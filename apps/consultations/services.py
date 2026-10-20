@@ -6,7 +6,6 @@ from django.utils import timezone
 from django.conf import settings
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from .models import Consultation, VoiceSession
-from apps.notifications.call_notifications import send_incoming_call_notification
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +27,6 @@ class VoiceCallService:
     - Atomic state machine transitions with database row locking
     - Idempotency for decline, cancel, missed, end
     - Reusing active non-terminal sessions (duplicate start prevention)
-    - Transactionally safe FCM notification dispatch
-    - Agora RTC session and token authorization
-    - Django Channels WebSocket signaling broadcasts
     """
 
     @staticmethod
@@ -119,92 +115,10 @@ class VoiceCallService:
     @classmethod
     def broadcast_call_status(cls, consultation: Consultation, session: VoiceSession, user, action_type: str, ended_at=None):
         """
-        Broadcasts call signaling status changes via Django Channels WebSockets to consultation and target user channels.
+        Legacy signaling hook retained as a safe no-op now that in-app voice
+        signaling has been replaced by SIM-based phone calls.
         """
-        try:
-            from channels.layers import get_channel_layer
-            from asgiref.sync import async_to_sync
-            channel_layer = get_channel_layer()
-            if not channel_layer:
-                return
-
-            action_lower = action_type.lower()
-            event_type = f"broadcast_call_{action_lower}"
-            event_name = f"call_{action_lower}"
-            user_id_str = str(user.id)
-
-            ws_payload = {
-                'type': event_name,
-                'action': event_name,
-                'event': event_name,
-                'status': action_type,
-                'sender_id': user_id_str,
-                'caller_id': user_id_str,
-                'consultation_id': str(consultation.id),
-                'session_id': session.session_key if session else "",
-                'call_id': session.session_key if session else "",
-            }
-            if ended_at:
-                ws_payload['ended_at'] = ended_at.isoformat() if hasattr(ended_at, 'isoformat') else ended_at
-
-            # Point-to-point call lifecycle signals (ACCEPTED, DECLINED, ENDED,
-            # CANCELLED) must only be delivered to the target user's personal
-            # channel.  Broadcasting to the consultation room group as well
-            # causes duplicate delivery when the caller is subscribed to both
-            # the user_calls channel and the consultation room channel.
-            ROOM_BROADCAST_ACTIONS = {'incoming', 'offer', 'connected'}
-            should_broadcast_to_room = action_lower in ROOM_BROADCAST_ACTIONS
-
-            if should_broadcast_to_room:
-                async_to_sync(channel_layer.group_send)(
-                    f"consultation_call_{consultation.id}",
-                    {
-                        'type': event_type,
-                        'action': event_name,
-                        'sender_id': user_id_str,
-                        'consultation_id': str(consultation.id),
-                        'ended_at': ws_payload.get('ended_at'),
-                    }
-                )
-
-            recipient_id = None
-            if session and session.caller and str(session.caller.id) != user_id_str:
-                recipient_id = str(session.caller.id)
-            else:
-                patient_id = str(consultation.user.id) if consultation.user else ""
-                midwife_user_id = str(consultation.midwife.user.id) if (consultation.midwife and hasattr(consultation.midwife, 'user') and consultation.midwife.user) else ""
-
-                if user_id_str == patient_id and midwife_user_id:
-                    recipient_id = midwife_user_id
-                elif user_id_str == midwife_user_id and patient_id:
-                    recipient_id = patient_id
-
-            if recipient_id and recipient_id != user_id_str:
-                ws_payload['receiver_id'] = recipient_id
-                ws_payload['recipient_id'] = recipient_id
-                signal_data = dict(ws_payload)
-                signal_data['type'] = 'call_signal'
-                signal_data['action'] = event_name
-                signal_data['event'] = event_name
-                signal_data['data'] = ws_payload
-
-                action_log_name = action_type.upper()
-                if action_log_name in ['ACCEPTED', 'ACCEPT']:
-                    action_log_name = 'ACCEPT'
-                elif action_log_name in ['DECLINED', 'DECLINE']:
-                    action_log_name = 'DECLINE'
-                elif action_log_name in ['ENDED', 'END']:
-                    action_log_name = 'END'
-
-                logger.info(f"[CALL-ACTION] source=WEBSOCKET action={action_log_name} event=SIGNAL_DISPATCHING call_id={getattr(session, 'session_key', None)} recipient={recipient_id}")
-                async_to_sync(channel_layer.group_send)(
-                    f"user_calls_{recipient_id}",
-                    signal_data
-                )
-                logger.info(f"[CALL-ACTION] source=WEBSOCKET action={action_log_name} event=SIGNAL_DISPATCHED call_id={getattr(session, 'session_key', None)} recipient={recipient_id}")
-                logger.info(f"[CALL] call_id={getattr(session, 'session_key', None)} event=WS_USER_SIGNAL_SENT recipient={recipient_id} action={event_name}")
-        except Exception as e:
-            logger.error(f"[CALL] event=WS_BROADCAST_ERROR action={action_type} error={e}")
+        pass
 
     @classmethod
     def get_voice_session(cls, consultation: Consultation, select_for_update=False) -> VoiceSession:
@@ -249,16 +163,13 @@ class VoiceCallService:
             if active_session:
                 session = active_session
                 session_key = session.session_key
-                agora_channel_name = session.agora_channel_name
                 is_new_call_attempt = False
                 logger.info(f"[CALL] call_id={session_key} event=REUSING_ACTIVE_SESSION status={session.status}")
             else:
                 session_key = f"VOICE-{uuid.uuid4().hex[:12].upper()}"
-                agora_channel_name = f"cagh_voice_{session_key}"
                 session = VoiceSession.objects.create(
                     consultation=consultation,
                     session_key=session_key,
-                    agora_channel_name=agora_channel_name,
                     status=VoiceSession.VoiceSessionStatus.RINGING,
                     caller=caller,
                 )
@@ -267,64 +178,8 @@ class VoiceCallService:
 
         caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
         recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
 
-        # 1. Authoritative WebSocket Call Offer Dispatch (Independent of FCM)
-        if broadcast_ws and recipient and is_new_call_attempt:
-            group_name = f"user_calls_{recipient.id}"
-            logger.info(
-                f"[CALL] call_id={session_key} event=WS_CALL_OFFER_DISPATCHING receiver={recipient.id} group={group_name}"
-            )
-            try:
-                from channels.layers import get_channel_layer
-                from asgiref.sync import async_to_sync
-                channel_layer = get_channel_layer()
-                if channel_layer:
-                    ws_payload = {
-                        "type": "call_signal",
-                        "action": "call_offer",
-                        "event": "VOICE_SESSION_CREATED",
-                        "call_id": session_key,
-                        "session_id": session_key,
-                        "session_key": session_key,
-                        "consultation_id": str(consultation.id),
-                        "appointment_id": str(consultation.appointment.id) if consultation.appointment else str(consultation.id),
-                        "caller_id": str(caller.id),
-                        "receiver_id": str(recipient.id),
-                        "recipient_id": str(recipient.id),
-                        "caller_name": caller_name,
-                        "receiver_name": recipient_name,
-                        "recipient_name": recipient_name,
-                        "call_type": call_type,
-                        "agora_channel_name": agora_channel_name,
-                        "agora_app_id": agora_app_id,
-                        "timestamp": str(int(timezone.now().timestamp())),
-                    }
-                    async_to_sync(channel_layer.group_send)(
-                        group_name,
-                        ws_payload
-                    )
-                    logger.info(
-                        f"[CALL] call_id={session_key} event=WS_CALL_OFFER_SENT recipient={recipient.id} action=call_offer"
-                    )
-                    async_to_sync(channel_layer.group_send)(
-                        f"consultation_call_{consultation.id}",
-                        {
-                            'type': 'broadcast_incoming_call',
-                            'sender_id': str(caller.id),
-                            'sender_name': caller_name,
-                            'call_type': call_type,
-                            'consultation_id': str(consultation.id),
-                            'session_id': session_key,
-                            'call_id': session_key,
-                        }
-                    )
-            except Exception:
-                logger.exception(
-                    f"[CALL] call_id={session_key} event=WS_CALL_OFFER_FAILED recipient={recipient.id}"
-                )
-
-        # 2. Schedule Celery background ringing timeout execution & FCM dispatch
+        # Schedule Celery background ringing timeout execution
         if is_new_call_attempt:
             import sys
             if 'test' not in sys.argv and not getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
@@ -336,23 +191,6 @@ class VoiceCallService:
                     )
                 except Exception as te:
                     logger.debug(f"[CALL] Celery task scheduling skipped: {te}")
-
-            if recipient:
-                try:
-                    send_incoming_call_notification(
-                        caller=caller,
-                        recipient=recipient,
-                        consultation=consultation,
-                        call_type=call_type,
-                        session_key=session_key,
-                        agora_channel_name=agora_channel_name,
-                        agora_app_id=agora_app_id,
-                    )
-                except Exception as e:
-                    logger.error(f"[CALL] call_id={session_key} event=FCM_NOTIFICATION_ERROR error={e}")
-
-        stun_servers = getattr(settings, 'WEBRTC_STUN_SERVERS', ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"])
-        turn_servers = getattr(settings, 'WEBRTC_TURN_SERVERS', [])
 
         return {
             'status': session.status,
@@ -367,10 +205,6 @@ class VoiceCallService:
             'receiver_name': recipient_name,
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
-            'ice_servers': [
-                {'urls': stun_servers},
-                *turn_servers,
-            ],
         }
 
     @classmethod
@@ -402,10 +236,7 @@ class VoiceCallService:
                 session.status = VoiceSession.VoiceSessionStatus.ACCEPTED
                 if not session.started_at:
                     session.started_at = timezone.now()
-                if not session.agora_channel_name:
-                    session.agora_channel_name = f"cagh_voice_{session.session_key}"
                 session.save()
-
                 consultation.status = Consultation.ConsultationStatus.ACTIVE
                 if not consultation.started_at:
                     consultation.started_at = timezone.now()
@@ -417,14 +248,10 @@ class VoiceCallService:
         if broadcast_ws and not is_idempotent_repeat:
             cls.broadcast_call_status(consultation, session, user, 'ACCEPTED')
 
-        agora_app_id = getattr(settings, 'AGORA_APP_ID', 'cagh_agora_app_id_placeholder')
         caller = session.caller
         _, _, recipient = cls.verify_and_resolve_participants(consultation, user)
         caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
         recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
-
-        stun_servers = getattr(settings, 'WEBRTC_STUN_SERVERS', ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"])
-        turn_servers = getattr(settings, 'WEBRTC_TURN_SERVERS', [])
 
         return {
             'status': session.status,
@@ -438,16 +265,12 @@ class VoiceCallService:
             'receiver_name': recipient_name,
             'recipient_name': recipient_name,
             'consultation_id': str(consultation.id),
-            'ice_servers': [
-                {'urls': stun_servers},
-                *turn_servers,
-            ],
         }, 200
 
     @classmethod
     def connect_call(cls, consultation: Consultation, user, broadcast_ws=True) -> tuple[dict, int]:
         """
-        Marks call ONGOING/ACTIVE when WebRTC media connects.
+        Marks call ONGOING/ACTIVE when voice session connects.
         """
         with transaction.atomic():
             cls.verify_and_resolve_participants(consultation, user)
@@ -577,62 +400,4 @@ class VoiceCallService:
 
         return {'status': 'ENDED', 'ended_at': session.ended_at, 'session_key': session.session_key}, 200
 
-    @classmethod
-    def get_webrtc_config(cls, consultation: Consultation, user) -> tuple[dict, int]:
-        """
-        Retrieves WebRTC STUN/TURN ICE server configuration and call metadata for an active call.
-        Validates participant authorization and rejects terminal calls with 410 Gone.
-        """
-        cls.verify_and_resolve_participants(consultation, user)
-        session = cls.get_voice_session(consultation, select_for_update=False)
-        if not session:
-            return {'error': 'No voice session found for this consultation.'}, 404
 
-        cls.check_and_auto_expire_ringing_session(session)
-
-        if session.status in TERMINAL_CALL_STATES:
-            logger.warning(
-                f"[CALL] call_id={session.session_key} event=WEBRTC_CONFIG_REJECTED_TERMINAL "
-                f"status={session.status} — returning 410 Gone"
-            )
-            return {
-                'error': f"Voice session is no longer active (status: {session.status}).",
-                'status': session.status,
-                'session_key': session.session_key,
-                'call_id': session.session_key,
-            }, 410
-
-        caller = session.caller
-        _, _, recipient = cls.verify_and_resolve_participants(consultation, user)
-        caller_name = cls.get_display_name(caller) or getattr(caller, 'username', 'Caller')
-        recipient_name = cls.get_display_name(recipient) or getattr(recipient, 'username', 'Recipient')
-
-        stun_servers = getattr(settings, 'WEBRTC_STUN_SERVERS', ["stun:stun1.l.google.com:19302", "stun:stun2.l.google.com:19302"])
-        turn_servers = getattr(settings, 'WEBRTC_TURN_SERVERS', [])
-
-        logger.info(f"[CALL] call_id={session.session_key} event=WEBRTC_CONFIG_GENERATED user_id={user.id}")
-
-        return {
-            'call_id': session.session_key,
-            'session_key': session.session_key,
-            'status': session.status,
-            'started_at': session.started_at,
-            'ice_servers': [
-                {'urls': stun_servers},
-                *turn_servers,
-            ],
-            'caller_id': str(caller.id) if caller else "",
-            'caller_name': caller_name,
-            'receiver_id': str(recipient.id) if recipient else "",
-            'recipient_id': str(recipient.id) if recipient else "",
-            'receiver_name': recipient_name,
-            'recipient_name': recipient_name,
-            'consultation_id': str(consultation.id),
-        }, 200
-
-    @classmethod
-    def generate_agora_token(cls, consultation: Consultation, user) -> tuple[dict, int]:
-        """
-        Backward compatibility endpoint alias for WebRTC config.
-        """
-        return cls.get_webrtc_config(consultation, user)
