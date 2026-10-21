@@ -6,6 +6,7 @@ from .views import (
     ReportViewSet,
     LanguageListView,
     LanguageSelectView,
+    TranslationListView,
 )
 
 router = DefaultRouter()
@@ -16,5 +17,7 @@ router.register(r'reports', ReportViewSet, basename='report')
 urlpatterns = [
     path('languages/', LanguageListView.as_view(), name='language-list'),
     path('languages/select/', LanguageSelectView.as_view(), name='language-select'),
+    path('translations/', TranslationListView.as_view(), name='translation-list'),
     path('', include(router.urls)),
 ]
+

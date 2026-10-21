@@ -1,5 +1,12 @@
 from rest_framework import serializers
-from .models import Facility, AuditLog, Report
+from .models import (
+    Facility,
+    AuditLog,
+    Report,
+    TranslationKey,
+    TranslationValue,
+    TranslationVersion,
+)
 
 
 class FacilitySerializer(serializers.ModelSerializer):
@@ -33,4 +40,25 @@ class LanguageSelectionSerializer(serializers.Serializer):
         required=True,
         help_text="Language code ('en', 'am') or name ('English', 'Amharic')."
     )
+
+
+class TranslationValueSerializer(serializers.ModelSerializer):
+    key_name = serializers.CharField(source='key.key', read_only=True)
+    category = serializers.CharField(source='key.category', read_only=True)
+
+    class Meta:
+        model = TranslationValue
+        fields = ('id', 'key_name', 'category', 'language', 'value', 'status', 'updated_at')
+
+
+class TranslationDictionaryResponseSerializer(serializers.Serializer):
+    language = serializers.CharField(help_text="Language code e.g. 'am'")
+    version = serializers.IntegerField(help_text="Current translation schema version integer")
+    up_to_date = serializers.BooleanField(help_text="True if client supplied version is already current")
+    count = serializers.IntegerField(help_text="Number of translations returned")
+    translations = serializers.DictField(
+        child=serializers.CharField(),
+        help_text="Dictionary of key -> translated string pairs"
+    )
+
 

@@ -364,3 +364,132 @@ class AdminDirectoryManagementAPITestCase(APITestCase):
         ):
             self.assertEqual(self.client.get(reverse(name)).status_code, status.HTTP_403_FORBIDDEN)
 
+
+class DynamicTranslationTestCase(APITestCase):
+
+    def setUp(self):
+        from apps.common.models import TranslationKey, TranslationValue, TranslationVersion
+
+        self.key_welcome = TranslationKey.objects.create(
+            key="welcomeBack",
+            default_text="Welcome Back",
+            category="auth",
+            description="Welcome greeting on login screen",
+        )
+        self.key_login = TranslationKey.objects.create(
+            key="loginBtn",
+            default_text="Log In",
+            category="auth",
+            description="Login button label",
+        )
+        self.key_draft = TranslationKey.objects.create(
+            key="draftKey",
+            default_text="Draft Feature",
+            category="home",
+        )
+
+        # Published Amharic translations
+        self.trans_welcome_am = TranslationValue.objects.create(
+            key=self.key_welcome,
+            language="am",
+            value="እንኳን ደህና መጡ",
+            status=TranslationValue.Status.PUBLISHED,
+        )
+        self.trans_login_am = TranslationValue.objects.create(
+            key=self.key_login,
+            language="am",
+            value="ግባ",
+            status=TranslationValue.Status.PUBLISHED,
+        )
+
+        # Draft Amharic translation (should NOT be returned)
+        self.trans_draft_am = TranslationValue.objects.create(
+            key=self.key_draft,
+            language="am",
+            value="ረቂቅ",
+            status=TranslationValue.Status.DRAFT,
+        )
+
+    def test_fetch_amharic_published_translations(self):
+        url = reverse("translation-list")
+        response = self.client.get(url, {"lang": "am"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+
+        self.assertEqual(data["language"], "am")
+        self.assertFalse(data["up_to_date"])
+        self.assertEqual(data["count"], 2)
+        self.assertIn("welcomeBack", data["translations"])
+        self.assertEqual(data["translations"]["welcomeBack"], "እንኳን ደህና መጡ")
+        self.assertEqual(data["translations"]["loginBtn"], "ግባ")
+        # Ensure draft translation is excluded
+        self.assertNotIn("draftKey", data["translations"])
+        self.assertIn("ETag", response.headers)
+
+    def test_fetch_english_translations_with_default_text_fallback(self):
+        url = reverse("translation-list")
+        response = self.client.get(url, {"lang": "en"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data
+
+        self.assertEqual(data["language"], "en")
+        self.assertEqual(data["translations"]["welcomeBack"], "Welcome Back")
+        self.assertEqual(data["translations"]["loginBtn"], "Log In")
+        self.assertEqual(data["translations"]["draftKey"], "Draft Feature")
+
+    def test_unsupported_language_returns_400(self):
+        url = reverse("translation-list")
+        response = self.client.get(url, {"lang": "xx"})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Unsupported language", response.data["error"])
+
+    def test_conditional_fetch_with_matching_version(self):
+        from apps.common.models import TranslationVersion
+
+        url = reverse("translation-list")
+        curr_ver = TranslationVersion.get_version("am")
+
+        # Client sends current version -> returns up_to_date=True and empty dict
+        response = self.client.get(url, {"lang": "am", "version": curr_ver})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["up_to_date"])
+        self.assertEqual(response.data["translations"], {})
+
+        # Client sends outdated version -> returns full dictionary
+        response_outdated = self.client.get(url, {"lang": "am", "version": curr_ver - 1})
+        self.assertEqual(response_outdated.status_code, status.HTTP_200_OK)
+        self.assertFalse(response_outdated.data["up_to_date"])
+        self.assertIn("welcomeBack", response_outdated.data["translations"])
+
+    def test_http_etag_304_caching(self):
+        url = reverse("translation-list")
+        first_resp = self.client.get(url, {"lang": "am"})
+        self.assertEqual(first_resp.status_code, status.HTTP_200_OK)
+        etag = first_resp.headers.get("ETag")
+        self.assertIsNotNone(etag)
+
+        # Request with matching If-None-Match header returns 304 Not Modified
+        cached_resp = self.client.get(url, {"lang": "am"}, HTTP_IF_NONE_MATCH=etag)
+        self.assertEqual(cached_resp.status_code, status.HTTP_304_NOT_MODIFIED)
+
+    def test_publishing_translation_bumps_version(self):
+        from apps.common.models import TranslationVersion, TranslationValue
+
+        old_version = TranslationVersion.get_version("am")
+
+        # Update draft to PUBLISHED
+        self.trans_draft_am.status = TranslationValue.Status.PUBLISHED
+        self.trans_draft_am.save()
+
+        new_version = TranslationVersion.get_version("am")
+        self.assertGreater(new_version, old_version)
+
+    def test_filter_by_category(self):
+        url = reverse("translation-list")
+        response = self.client.get(url, {"lang": "am", "category": "auth"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 2)
+        self.assertIn("welcomeBack", response.data["translations"])
+        self.assertIn("loginBtn", response.data["translations"])
+
+

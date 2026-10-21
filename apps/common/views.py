@@ -1,16 +1,24 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, OpenApiResponse
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from django.utils.translation import activate
 from django.conf import settings
 
-from .models import Facility, AuditLog, Report
+from .models import (
+    Facility,
+    AuditLog,
+    Report,
+    TranslationKey,
+    TranslationValue,
+    TranslationVersion,
+)
 from .serializers import (
     FacilitySerializer,
     AuditLogSerializer,
     ReportSerializer,
     LanguageSelectionSerializer,
+    TranslationDictionaryResponseSerializer,
 )
 
 SUPPORTED_LANGUAGES = [
@@ -110,6 +118,123 @@ class LanguageSelectView(APIView):
 
         response.set_cookie(getattr(settings, "LANGUAGE_COOKIE_NAME", "django_language"), code)
         return response
+
+
+class TranslationListView(APIView):
+    """
+    Returns published translations for a requested language with ETag and versioning support.
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    @extend_schema(
+        summary="Fetch published translations dictionary",
+        description="Returns key-value translations for a requested language with version tracking and conditional caching.",
+        parameters=[
+            OpenApiParameter(
+                name="lang",
+                description="Language code ('en', 'am'). Defaults to 'en'.",
+                required=False,
+                type=str,
+            ),
+            OpenApiParameter(
+                name="version",
+                description="Optional client-cached translation schema version. If up-to-date, returns up_to_date=True.",
+                required=False,
+                type=int,
+            ),
+            OpenApiParameter(
+                name="category",
+                description="Optional filter by category (e.g. 'auth', 'home').",
+                required=False,
+                type=str,
+            ),
+        ],
+        responses={
+            200: TranslationDictionaryResponseSerializer,
+            304: OpenApiResponse(description="Translations not modified (ETag match)"),
+            400: OpenApiResponse(description="Unsupported language code"),
+        },
+        tags=["Common"],
+    )
+    def get(self, request):
+        lang = request.query_params.get("lang", "en").strip().lower()
+        supported_codes = {item["code"] for item in SUPPORTED_LANGUAGES}
+
+        if lang not in supported_codes:
+            return Response(
+                {
+                    "error": f"Unsupported language '{lang}'. Supported language codes are: {', '.join(sorted(supported_codes))}."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        current_version = TranslationVersion.get_version(lang)
+        etag = f'W/"{lang}-v{current_version}"'
+
+        # Check HTTP ETag header
+        if_none_match = request.headers.get("If-None-Match")
+        if if_none_match and if_none_match.strip() == etag:
+            response = Response(status=status.HTTP_304_NOT_MODIFIED)
+            response["ETag"] = etag
+            response["Cache-Control"] = "public, max-age=300"
+            return response
+
+        # Check optional client version query parameter
+        client_version = request.query_params.get("version")
+        if client_version is not None:
+            try:
+                if int(client_version) == current_version:
+                    response = Response(
+                        {
+                            "language": lang,
+                            "version": current_version,
+                            "up_to_date": True,
+                            "count": 0,
+                            "translations": {},
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+                    response["ETag"] = etag
+                    response["Cache-Control"] = "public, max-age=300"
+                    return response
+            except (ValueError, TypeError):
+                pass
+
+        # Query published translations
+        tv_qs = TranslationValue.objects.filter(
+            language=lang,
+            status=TranslationValue.Status.PUBLISHED,
+        ).select_related("key")
+
+        category = request.query_params.get("category")
+        if category:
+            tv_qs = tv_qs.filter(key__category=category)
+
+        translations = {tv.key.key: tv.value for tv in tv_qs}
+
+        # For English, include default_text from TranslationKey if not overridden
+        if lang == "en":
+            tk_qs = TranslationKey.objects.all()
+            if category:
+                tk_qs = tk_qs.filter(category=category)
+            for tk in tk_qs:
+                if tk.key not in translations:
+                    translations[tk.key] = tk.default_text
+
+        response_data = {
+            "language": lang,
+            "version": current_version,
+            "up_to_date": False,
+            "count": len(translations),
+            "translations": translations,
+        }
+
+        response = Response(response_data, status=status.HTTP_200_OK)
+        response["ETag"] = etag
+        response["Cache-Control"] = "public, max-age=300"
+        return response
+
 
 
 import math

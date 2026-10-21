@@ -85,3 +85,120 @@ class Report(models.Model):
 
     def __str__(self):
         return f"Report {self.id} by {self.reporter.username} ({self.status})"
+
+
+class TranslationVersion(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    language = models.CharField(max_length=10, unique=True, db_index=True)
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['language']
+
+    def __str__(self):
+        return f"{self.language}: v{self.version} ({self.updated_at.strftime('%Y-%m-%d %H:%M')})"
+
+    @classmethod
+    def get_version(cls, language: str) -> int:
+        entry, _ = cls.objects.get_or_create(language=language.lower())
+        return entry.version
+
+    @classmethod
+    def bump(cls, language: str):
+        entry, _ = cls.objects.get_or_create(language=language.lower())
+        entry.version += 1
+        entry.save()
+
+
+class TranslationKey(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.CharField(
+        max_length=255,
+        unique=True,
+        db_index=True,
+        help_text=_("Unique identifier for this string, matching Flutter ARB key e.g. 'welcomeBack', 'login'")
+    )
+    default_text = models.TextField(help_text=_("Default English source string"))
+    category = models.CharField(
+        max_length=100,
+        blank=True,
+        default="general",
+        db_index=True,
+        help_text=_("Logical module or category, e.g. 'auth', 'home', 'consultations', 'profile'")
+    )
+    description = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text=_("Translator notes or contextual description")
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['category', 'key']
+        indexes = [
+            models.Index(fields=['category', 'key']),
+        ]
+
+    def __str__(self):
+        return f"{self.key} ({self.category})"
+
+
+class TranslationValue(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = 'DRAFT', _('Draft')
+        IN_REVIEW = 'IN_REVIEW', _('In Review')
+        PUBLISHED = 'PUBLISHED', _('Published')
+        ARCHIVED = 'ARCHIVED', _('Archived')
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    key = models.ForeignKey(
+        TranslationKey,
+        on_delete=models.CASCADE,
+        related_name='translations'
+    )
+    language = models.CharField(
+        max_length=10,
+        db_index=True,
+        help_text=_("ISO language code e.g. 'en', 'am'")
+    )
+    value = models.TextField(help_text=_("Localized translated text"))
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PUBLISHED,
+        db_index=True
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_translations'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['key', 'language']
+        unique_together = ('key', 'language')
+        indexes = [
+            models.Index(fields=['language', 'status']),
+        ]
+
+    def __str__(self):
+        return f"{self.key.key} [{self.language}]: {self.status}"
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.status == self.Status.PUBLISHED:
+            TranslationVersion.bump(self.language)
+
+    def delete(self, *args, **kwargs):
+        lang = self.language
+        was_published = self.status == self.Status.PUBLISHED
+        super().delete(*args, **kwargs)
+        if was_published:
+            TranslationVersion.bump(lang)
+
