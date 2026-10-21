@@ -4,7 +4,12 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from apps.users.models import Profile
-from apps.common.models import Facility
+from apps.common.models import (
+    Facility,
+    TranslationKey,
+    TranslationValue,
+    TranslationVersion,
+)
 from apps.notifications.models import Notification
 from apps.users.models import EmergencyContact
 
@@ -491,5 +496,84 @@ class DynamicTranslationTestCase(APITestCase):
         self.assertEqual(response.data["count"], 2)
         self.assertIn("welcomeBack", response.data["translations"])
         self.assertIn("loginBtn", response.data["translations"])
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class TranslationManagementTestCase(APITestCase):
+
+    def setUp(self):
+        self.staff_user = User.objects.create_user(
+            username="staff_translator",
+            email="translator@example.com",
+            password="Password123!",
+            is_staff=True,
+        )
+        self.regular_user = User.objects.create_user(
+            username="regular_user",
+            email="regular@example.com",
+            password="Password123!",
+            is_staff=False,
+        )
+        self.key = TranslationKey.objects.create(
+            key="testManageKey",
+            default_text="Manage Me",
+            category="general",
+        )
+        self.val = TranslationValue.objects.create(
+            key=self.key,
+            language="am",
+            value="አስተዳድረኝ",
+            status=TranslationValue.Status.DRAFT,
+        )
+
+    def test_unauthenticated_cannot_access_manage_endpoints(self):
+        url = reverse("translation-key-list")
+        res = self.client.get(url)
+        self.assertIn(res.status_code, [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN])
+
+    def test_regular_user_cannot_access_manage_endpoints(self):
+        self.client.force_authenticate(user=self.regular_user)
+        url = reverse("translation-key-list")
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_can_list_and_audit_keys(self):
+        self.client.force_authenticate(user=self.staff_user)
+        url = reverse("translation-key-list")
+        res = self.client.get(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        audit_url = reverse("translation-key-audit")
+        audit_res = self.client.get(audit_url)
+        self.assertEqual(audit_res.status_code, status.HTTP_200_OK)
+        self.assertIn("total_keys", audit_res.data)
+        self.assertIn("languages", audit_res.data)
+
+    def test_staff_bulk_publish_and_version_bump(self):
+        self.client.force_authenticate(user=self.staff_user)
+        old_ver = TranslationVersion.get_version("am")
+        url = reverse("translation-value-publish")
+        res = self.client.post(url, {"ids": [str(self.val.id)]}, format="json")
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        self.val.refresh_from_db()
+        self.assertEqual(self.val.status, TranslationValue.Status.PUBLISHED)
+        new_ver = TranslationVersion.get_version("am")
+        self.assertGreater(new_ver, old_ver)
+
+
+@override_settings(SECURE_SSL_REDIRECT=False)
+class TranslationValidationCommandTestCase(APITestCase):
+
+    def test_validate_translations_command_execution(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("validate_translations", stdout=out)
+        output = out.getvalue()
+        self.assertIn("Translation Health & Completeness Audit", output)
+        self.assertIn("Total Translation Keys in Database", output)
+
 
 

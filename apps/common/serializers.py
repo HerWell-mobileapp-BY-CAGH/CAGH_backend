@@ -62,3 +62,22 @@ class TranslationDictionaryResponseSerializer(serializers.Serializer):
     )
 
 
+class TranslationValueManageSerializer(serializers.ModelSerializer):
+    key_name = serializers.CharField(source='key.key', read_only=True)
+
+    class Meta:
+        model = TranslationValue
+        fields = ('id', 'key', 'key_name', 'language', 'value', 'status', 'reviewed_by', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+
+class TranslationKeyManageSerializer(serializers.ModelSerializer):
+    translations = TranslationValueSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = TranslationKey
+        fields = ('id', 'key', 'default_text', 'category', 'description', 'translations', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+
+

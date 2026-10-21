@@ -1,6 +1,7 @@
 from rest_framework import viewsets, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.decorators import action
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse
 from django.utils.translation import activate
 from django.conf import settings
@@ -19,6 +20,8 @@ from .serializers import (
     ReportSerializer,
     LanguageSelectionSerializer,
     TranslationDictionaryResponseSerializer,
+    TranslationKeyManageSerializer,
+    TranslationValueManageSerializer,
 )
 
 SUPPORTED_LANGUAGES = [
@@ -235,6 +238,105 @@ class TranslationListView(APIView):
         response["Cache-Control"] = "public, max-age=300"
         return response
 
+
+class TranslationKeyViewSet(viewsets.ModelViewSet):
+    queryset = TranslationKey.objects.all().prefetch_related("translations")
+    serializer_class = TranslationKeyManageSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        category = self.request.query_params.get("category")
+        if category:
+            qs = qs.filter(category=category)
+        search = self.request.query_params.get("search")
+        if search:
+            qs = qs.filter(models.Q(key__icontains=search) | models.Q(default_text__icontains=search))
+        return qs
+
+    @action(detail=False, methods=["get"], permission_classes=[permissions.IsAdminUser])
+    def audit(self, request):
+        """Returns translation coverage and completeness audit report across all supported languages."""
+        all_keys = list(TranslationKey.objects.all())
+        total_keys = len(all_keys)
+        supported_codes = [l["code"] for l in SUPPORTED_LANGUAGES]
+
+        report = {
+            "total_keys": total_keys,
+            "languages": {},
+            "has_missing": False,
+        }
+
+        for lang in supported_codes:
+            values_qs = TranslationValue.objects.filter(language=lang)
+            value_map = {tv.key_id: tv for tv in values_qs}
+
+            missing_keys = []
+            unpublished_keys = []
+            published_count = 0
+
+            for tk in all_keys:
+                tv = value_map.get(tk.id)
+                if not tv:
+                    missing_keys.append(tk.key)
+                elif tv.status != TranslationValue.Status.PUBLISHED:
+                    unpublished_keys.append(tk.key)
+                else:
+                    published_count += 1
+
+            coverage = round((published_count / total_keys * 100), 2) if total_keys else 0.0
+            version = TranslationVersion.get_version(lang)
+
+            if missing_keys or unpublished_keys:
+                report["has_missing"] = True
+
+            report["languages"][lang] = {
+                "version": version,
+                "published_count": published_count,
+                "missing_count": len(missing_keys),
+                "unpublished_count": len(unpublished_keys),
+                "coverage_pct": coverage,
+                "missing_keys": missing_keys,
+            }
+
+        return Response(report, status=status.HTTP_200_OK)
+
+
+class TranslationValueViewSet(viewsets.ModelViewSet):
+    queryset = TranslationValue.objects.all().select_related("key")
+    serializer_class = TranslationValueManageSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        lang = self.request.query_params.get("language")
+        if lang:
+            qs = qs.filter(language=lang.strip().lower())
+        status_filter = self.request.query_params.get("status")
+        if status_filter:
+            qs = qs.filter(status=status_filter.upper())
+        search = self.request.query_params.get("search")
+        if search:
+            qs = qs.filter(models.Q(key__key__icontains=search) | models.Q(value__icontains=search))
+        return qs
+
+    @action(detail=False, methods=["post"], permission_classes=[permissions.IsAdminUser])
+    def publish(self, request):
+        """Bulk publish translations by ID and bump version for affected languages."""
+        ids = request.data.get("ids", [])
+        if not ids or not isinstance(ids, list):
+            return Response({"error": "List of 'ids' required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        translations = TranslationValue.objects.filter(id__in=ids)
+        updated = translations.update(status=TranslationValue.Status.PUBLISHED)
+        languages = set(translations.values_list("language", flat=True))
+        for lang in languages:
+            TranslationVersion.bump(lang)
+
+        return Response(
+            {"message": f"{updated} translation(s) published.", "affected_languages": list(languages)},
+            status=status.HTTP_200_OK,
+        )
 
 
 import math
