@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta
 from django.db import models
 from django.utils import timezone
@@ -82,37 +84,44 @@ def _notify_user_and_midwife(appointment, action_type="APPOINTMENT_UPDATE"):
         body_mw = f"Appointment with {patient_name} on {date_str} at {time_str} has been updated."
 
     # Patient Notification
-    Notification.objects.create(
-        user=appointment.user,
-        title=title_pat,
-        body=body_pat,
-        type="APPOINTMENT",
-        action=action_type,
-        reference_id=str(appointment.id),
-    )
-    send_general_push_notification(
-        user=appointment.user,
-        title=title_pat,
-        body=body_pat,
-        extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
-    )
+    try:
+        if appointment.user:
+            Notification.objects.create(
+                user=appointment.user,
+                title=title_pat,
+                body=body_pat,
+                type="APPOINTMENT",
+                action=action_type,
+                reference_id=str(appointment.id),
+            )
+            send_general_push_notification(
+                user=appointment.user,
+                title=title_pat,
+                body=body_pat,
+                extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
+            )
+    except Exception as e:
+        logger.warning(f"Error sending patient notification for appointment {appointment.id}: {e}")
 
     # Midwife Notification
-    if appointment.midwife and appointment.midwife.user:
-        Notification.objects.create(
-            user=appointment.midwife.user,
-            title=title_mw,
-            body=body_mw,
-            type="APPOINTMENT",
-            action=action_type,
-            reference_id=str(appointment.id),
-        )
-        send_general_push_notification(
-            user=appointment.midwife.user,
-            title=title_mw,
-            body=body_mw,
-            extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
-        )
+    try:
+        if appointment.midwife and appointment.midwife.user:
+            Notification.objects.create(
+                user=appointment.midwife.user,
+                title=title_mw,
+                body=body_mw,
+                type="APPOINTMENT",
+                action=action_type,
+                reference_id=str(appointment.id),
+            )
+            send_general_push_notification(
+                user=appointment.midwife.user,
+                title=title_mw,
+                body=body_mw,
+                extra_data={"type": "APPOINTMENT", "action": action_type, "appointment_id": str(appointment.id)},
+            )
+    except Exception as e:
+        logger.warning(f"Error sending midwife notification for appointment {appointment.id}: {e}")
 
 
 class AvailabilityViewSet(viewsets.ModelViewSet):
@@ -466,20 +475,31 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment.status = Appointment.AppointmentStatus.CONFIRMED
         appointment.save()
 
-        from apps.consultations.models import Consultation
-        Consultation.objects.get_or_create(
-            appointment=appointment,
-            defaults={
-                'user': appointment.user,
-                'midwife': appointment.midwife,
-                'consultation_type': appointment.appointment_type,
-                'status': Consultation.ConsultationStatus.SCHEDULED,
-            }
-        )
+        try:
+            from apps.consultations.models import Consultation
+            Consultation.objects.get_or_create(
+                appointment=appointment,
+                defaults={
+                    'user': appointment.user,
+                    'midwife': appointment.midwife,
+                    'consultation_type': appointment.appointment_type,
+                    'status': Consultation.ConsultationStatus.SCHEDULED,
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to create consultation record for appointment {appointment.id}: {e}")
 
-        _notify_user_and_midwife(appointment, action_type="APPOINTMENT_CONFIRMED")
+        try:
+            _notify_user_and_midwife(appointment, action_type="APPOINTMENT_CONFIRMED")
+        except Exception as e:
+            logger.warning(f"Failed to dispatch confirmation notification for appointment {appointment.id}: {e}")
 
         return Response({'status': 'CONFIRMED', 'message': 'Appointment confirmed successfully.'}, status=status.HTTP_200_OK)
+
+    @extend_schema(summary="Midwife action: Accept appointment (alias for confirm)", tags=["Appointments"])
+    @action(detail=True, methods=['post'])
+    def accept(self, request, pk=None):
+        return self.confirm(request, pk=pk)
 
     @extend_schema(summary="Midwife action: Complete appointment", tags=["Appointments"])
     @action(detail=True, methods=['post'])
