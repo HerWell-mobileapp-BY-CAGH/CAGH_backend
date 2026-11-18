@@ -6,7 +6,7 @@ from rest_framework.test import APITestCase
 from django.contrib.auth import get_user_model
 from apps.midwives.models import MidwifeProfile, Hospital
 from apps.appointments.models import Appointment
-from apps.consultations.models import Consultation, ConsultationNote, VoiceSession, VideoSession
+from apps.consultations.models import Consultation, ConsultationNote, VideoSession
 from apps.notifications.models import Notification
 
 User = get_user_model()
@@ -88,22 +88,16 @@ class ConsultationManagementTestCase(APITestCase):
         self.assertEqual(good_res.data["consultation_type"], "VIRTUAL_VOICE")
         self.assertEqual(good_res.data["status"], "SCHEDULED")
 
-    def test_consultation_start_and_completion_lifecycle(self):
+    def test_consultation_completion_lifecycle(self):
         consultation = Consultation.objects.create(
             appointment=self.confirmed_appointment,
             user=self.patient,
             midwife=self.midwife_profile,
             consultation_type="VIRTUAL_VOICE",
-            status="SCHEDULED",
+            status="ACTIVE",
         )
 
         self.client.force_authenticate(user=self.midwife_user)
-        start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
-        start_res = self.client.post(start_url)
-        self.assertEqual(start_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(start_res.data["status"], "RINGING")
-        self.assertIn("session_key", start_res.data)
-
         complete_url = reverse("consultation-complete", kwargs={"pk": consultation.id})
         complete_data = {
             "summary": "Patient presented for maternal consultation. Vital signs normal.",
@@ -119,118 +113,8 @@ class ConsultationManagementTestCase(APITestCase):
         self.confirmed_appointment.refresh_from_db()
         self.assertEqual(self.confirmed_appointment.status, "COMPLETED")
 
-    def test_voice_session_lifecycle_endpoints(self):
-        consultation = Consultation.objects.create(
-            appointment=self.confirmed_appointment,
-            user=self.patient,
-            midwife=self.midwife_profile,
-            consultation_type="VIRTUAL_VOICE",
-            status="SCHEDULED",
-        )
-
-        # 1. Caller starts call -> RINGING
-        self.client.force_authenticate(user=self.patient)
-        start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
-        res_start = self.client.post(start_url)
-        self.assertEqual(res_start.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_start.data["status"], "RINGING")
-
-        session = VoiceSession.objects.get(consultation=consultation)
-        self.assertEqual(session.status, VoiceSession.VoiceSessionStatus.RINGING)
-        self.assertEqual(session.caller, self.patient)
-
-        # 2. Recipient accepts call -> ACCEPTED
-        self.client.force_authenticate(user=self.midwife_user)
-        accept_url = reverse("consultation-voice-session-accept", kwargs={"pk": consultation.id})
-        res_accept = self.client.post(accept_url)
-        self.assertEqual(res_accept.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_accept.data["status"], "ACCEPTED")
-
-        # 3. Connect audio stream -> ONGOING
-        connect_url = reverse("consultation-voice-session-connect", kwargs={"pk": consultation.id})
-        res_conn = self.client.post(connect_url)
-        self.assertEqual(res_conn.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_conn.data["status"], "ONGOING")
-
-        # 4. Caller checks voice session status
-        self.client.force_authenticate(user=self.patient)
-        status_url = reverse("consultation-manage-voice-session", kwargs={"pk": consultation.id})
-        res_status = self.client.get(status_url)
-        self.assertEqual(res_status.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_status.data["status"], "ONGOING")
-
-        # 5. End call -> ENDED
-        end_url = reverse("consultation-voice-session-end", kwargs={"pk": consultation.id})
-        res_end = self.client.post(end_url)
-        self.assertEqual(res_end.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_end.data["status"], "ENDED")
-
-        session.refresh_from_db()
-        self.assertEqual(session.status, VoiceSession.VoiceSessionStatus.ENDED)
-
-    def test_race_condition_protection_on_cancel_and_accept(self):
-        consultation = Consultation.objects.create(
-            appointment=self.confirmed_appointment,
-            user=self.patient,
-            midwife=self.midwife_profile,
-            consultation_type="VIRTUAL_VOICE",
-            status="SCHEDULED",
-        )
-
-        self.client.force_authenticate(user=self.patient)
-        start_url = reverse("consultation-start", kwargs={"pk": consultation.id})
-        self.client.post(start_url)
-
-        # Patient cancels call
-        cancel_url = reverse("consultation-voice-session-cancel", kwargs={"pk": consultation.id})
-        res_cancel = self.client.post(cancel_url)
-        self.assertEqual(res_cancel.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_cancel.data["status"], "CANCELLED")
-
-        # Midwife attempts to accept cancelled call (Race condition test)
-        self.client.force_authenticate(user=self.midwife_user)
-        accept_url = reverse("consultation-voice-session-accept", kwargs={"pk": consultation.id})
-        res_accept = self.client.post(accept_url)
-        self.assertEqual(res_accept.status_code, status.HTTP_409_CONFLICT)
-
-    def test_fallback_manage_voice_session_status_guard_and_broadcast(self):
-        consultation = Consultation.objects.create(
-            appointment=self.confirmed_appointment,
-            user=self.patient,
-            midwife=self.midwife_profile,
-            consultation_type="VIRTUAL_VOICE",
-            status="SCHEDULED",
-        )
-
-        # 1. Caller starts call via manage_voice_session fallback
-        self.client.force_authenticate(user=self.patient)
-        manage_url = reverse("consultation-manage-voice-session", kwargs={"pk": consultation.id})
-        res_start = self.client.post(manage_url, {"action": "START"}, format="json")
-        self.assertEqual(res_start.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_start.data["status"], "RINGING")
-
-        # 2. Patient cancels call via manage_voice_session fallback
-        res_cancel = self.client.post(manage_url, {"action": "CANCEL"}, format="json")
-        self.assertEqual(res_cancel.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_cancel.data["status"], "CANCELLED")
-
-        # 3. Midwife attempts to accept cancelled call via manage_voice_session fallback -> 409 Conflict
-        self.client.force_authenticate(user=self.midwife_user)
-        res_accept = self.client.post(manage_url, {"action": "ACCEPT"}, format="json")
-        self.assertEqual(res_accept.status_code, status.HTTP_409_CONFLICT)
-
-        # 4. Midwife attempts to decline cancelled call via manage_voice_session fallback -> 409 Conflict
-        res_decline = self.client.post(manage_url, {"action": "DECLINE"}, format="json")
-        self.assertEqual(res_decline.status_code, status.HTTP_409_CONFLICT)
-
-        # 5. Verify accept ok returns ACCEPTED status
-        session = VoiceSession.objects.get(consultation=consultation)
-        session.status = VoiceSession.VoiceSessionStatus.RINGING
-        session.save()
-
-        res_accept_ok = self.client.post(manage_url, {"action": "ACCEPT"}, format="json")
-        self.assertEqual(res_accept_ok.status_code, status.HTTP_200_OK)
-        self.assertEqual(res_accept_ok.data["status"], "ACCEPTED")
+        notification = Notification.objects.filter(user=self.patient, action="CONSULTATION_COMPLETED").first()
+        self.assertIsNotNone(notification)
 
     def test_unauthorized_user_cannot_access_consultation_call_midwife(self):
         consultation = Consultation.objects.create(
@@ -299,12 +183,3 @@ class ConsultationManagementTestCase(APITestCase):
         history_url = reverse("consultation-history")
         hist_res = self.client.get(history_url)
         self.assertEqual(hist_res.status_code, status.HTTP_200_OK)
-
-    def test_start_call_using_appointment_id(self):
-        self.client.force_authenticate(user=self.patient)
-        start_url = reverse("consultation-start", kwargs={"pk": self.confirmed_appointment.id})
-        res = self.client.post(start_url)
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(res.data["status"], "RINGING")
-        self.assertIsNotNone(res.data["consultation"])
-

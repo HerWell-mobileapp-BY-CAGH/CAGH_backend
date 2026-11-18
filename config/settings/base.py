@@ -126,14 +126,16 @@ if 'test' in sys.argv:
         }
     }
 elif os.environ.get('DATABASE_URL'):
-    # Reuse database connections across requests to avoid connection setup latency.
-    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 60)))
+    # In pooler environments (e.g., Supabase Session Pooler on port 5432), set CONN_MAX_AGE to 0
+    # to release connections immediately at the end of each request and avoid connection exhaustion.
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
     DATABASES = {
         'default': dj_database_url.config(
             conn_max_age=conn_max_age,
             conn_health_checks=True,
         )
     }
+    DATABASES['default']['CONN_MAX_AGE'] = conn_max_age
     if os.environ.get('DISABLE_SERVER_SIDE_CURSORS', '').lower() == 'true':
         DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
 else:
@@ -150,8 +152,8 @@ else:
     DB_HOST = os.environ.get('POSTGRES_HOST', 'localhost')
     DB_PORT = os.environ.get('POSTGRES_PORT', '5432')
 
-    # Reuse database connections across requests to avoid connection setup latency.
-    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 60)))
+    # In pooler environments (e.g., Supabase Session Pooler on port 5432), set CONN_MAX_AGE to 0.
+    conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',

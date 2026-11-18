@@ -33,12 +33,14 @@ if not _running_in_docker():
     elif docker_host_configured:
         if database_url and "@db:" in database_url:
             remapped_url = database_url.replace("@db:", "@localhost:")
+            conn_max_age = int(os.environ.get('DB_CONN_MAX_AGE', os.environ.get('CONN_MAX_AGE', 0)))
             DATABASES = {
                 "default": dj_database_url.config(
                     default=remapped_url,
-                    conn_max_age=600,
+                    conn_max_age=conn_max_age,
                     conn_health_checks=True,
                 )
             }
+            DATABASES["default"]["CONN_MAX_AGE"] = conn_max_age
         elif postgres_host == "db":
             DATABASES["default"]["HOST"] = "localhost"

@@ -226,7 +226,7 @@ class AdminAppointmentListView(AdminReadOnlyListView):
 class AdminConsultationListView(AdminReadOnlyListView):
     """Read-only, complete consultation feed for the administrator portal."""
 
-    queryset = Consultation.objects.select_related("appointment", "appointment__user", "appointment__midwife", "user", "user__profile", "midwife", "midwife__user", "midwife__user__profile", "midwife__hospital").prefetch_related("notes", "notes__midwife", "voice_sessions")
+    queryset = Consultation.objects.select_related("appointment", "appointment__user", "appointment__midwife", "user", "user__profile", "midwife", "midwife__user", "midwife__user__profile", "midwife__hospital").prefetch_related("notes", "notes__midwife")
     serializer_class = AdminConsultationSerializer
     filterset_fields = ("status", "consultation_type", "midwife", "user", "appointment")
     search_fields = ("user__username", "user__email", "midwife__user__username", "midwife__user__email", "diagnosis", "summary")
